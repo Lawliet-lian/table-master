@@ -1,0 +1,48 @@
+# ---------- Node / npm ----------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.pnpm-store/
+
+# ---------- Build artefacts ----------
+# `main.js` is produced by `npm run build` (esbuild). Track only the source;
+# release artefacts go on GitHub Releases, not in the repo.
+main.js
+main.js.map
+dist/
+build/
+*.tsbuildinfo
+
+# ---------- Obsidian local-vault test scaffolding ----------
+# When the plugin is symlinked into a vault for development, Obsidian writes
+# these per-vault files next to it. None of them belong in the repo.
+data.json
+.obsidian/
+.hotreload
+
+# ---------- Editor / IDE ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.history/
+
+# ---------- OS junk ----------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------- Test / coverage ----------
+coverage/
+.nyc_output/
+*.lcov
+
+# ---------- Misc ----------
+.env
+.env.local
+*.local

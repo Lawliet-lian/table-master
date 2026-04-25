@@ -1,0 +1,289 @@
+import { Editor, MarkdownView, Notice, Plugin } from "obsidian";
+import { Prec } from "@codemirror/state";
+import { keymap } from "@codemirror/view";
+import { DEFAULT_SETTINGS, TableMasterSettings, TableMasterSettingTab } from "./settings";
+import { setLanguage, t } from "./i18n";
+import * as actions from "./editor/actions";
+import { getActionContext } from "./editor/contextHelper";
+import { locateTable } from "./editor/tableLocator";
+import { parseTable } from "./table/parser";
+import { navigateCell, navigateRowEnter } from "./editor/cellNavigator";
+import { buildFloatingToolbarExt } from "./ui/floatingToolbar";
+import { registerContextMenu } from "./ui/contextMenu";
+import { buildTableMergePostProcessor } from "./render/postProcessor";
+import { buildLivePreviewExt } from "./render/livePreview";
+import { GridEditorModal } from "./ui/gridEditorModal";
+import { NewTableModal } from "./ui/newTableModal";
+import { emptyModel, TableModel } from "./table/model";
+
+const CONFLICT_PLUGIN_IDS = [
+  "table-editor-obsidian", // Advanced Tables
+  "obsidian-markdown-table-editor",
+  "table-extended",
+];
+
+export default class TableMasterPlugin extends Plugin {
+  settings: TableMasterSettings = DEFAULT_SETTINGS;
+
+  async onload(): Promise<void> {
+    await this.loadSettings();
+    setLanguage(this.settings.language);
+
+    // Reading-view post-processor for merged cells
+    this.registerMarkdownPostProcessor(
+      buildTableMergePostProcessor({ component: this }),
+    );
+
+    // Floating toolbar (CM6 ViewPlugin)
+    this.registerEditorExtension(
+      buildFloatingToolbarExt({
+        getApp: () => this.app,
+        getPlugin: () => this,
+      }),
+    );
+
+    // Live Preview merge renderer (CM6 ViewPlugin). The implementation only
+    // toggles rowspan/colspan attributes and hides placeholder cells, so it
+    // does not interfere with Obsidian's table widget the way a full DOM
+    // rebuild would.
+    this.registerEditorExtension(buildLivePreviewExt());
+
+    // Tab / Shift-Tab / Enter navigation inside tables
+    this.registerEditorExtension(
+      Prec.high(
+        keymap.of([
+          {
+            key: "Tab",
+            run: () => {
+              if (!this.settings.enableTabNavigation) return false;
+              const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+              if (!view) return false;
+              return navigateCell(view.editor, "next");
+            },
+          },
+          {
+            key: "Shift-Tab",
+            run: () => {
+              if (!this.settings.enableTabNavigation) return false;
+              const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+              if (!view) return false;
+              return navigateCell(view.editor, "prev");
+            },
+          },
+          {
+            key: "Enter",
+            run: () => {
+              if (!this.settings.enableTabNavigation) return false;
+              const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+              if (!view) return false;
+              const loc = locateTable(view.editor);
+              if (!loc) return false;
+              return navigateRowEnter(view.editor);
+            },
+          },
+        ]),
+      ),
+    );
+
+    // Right-click menu
+    registerContextMenu(this);
+
+    // When the user switches between markdown leaves (split panes, hover
+    // editors, secondary tabs), Obsidian doesn't necessarily emit a CM6
+    // update on the leaving view, so its floating toolbar would otherwise
+    // remain visible alongside the new active leaf's toolbar. Re-broadcast
+    // the same event the settings tab uses; every ViewPlugin instance is
+    // already listening and will re-evaluate its visibility against the new
+    // active leaf.
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        document.dispatchEvent(new CustomEvent("table-master:settings-changed"));
+      }),
+    );
+
+    // Commands
+    this.registerCommands();
+
+    // Settings tab
+    this.addSettingTab(new TableMasterSettingTab(this.app, this));
+
+    // Conflict warning
+    this.warnIfConflictingPlugins();
+  }
+
+  onunload(): void {
+    // Final safety sweep: Obsidian doesn't always reconfigure already-open
+    // CodeMirror views when a plugin unloads, so any floating toolbars that
+    // were attached to a markdown view's wrapper may otherwise leak. Remove
+    // every DOM node we tagged on construction.
+    document
+      .querySelectorAll<HTMLElement>('[data-tm-floating-toolbar="1"]')
+      .forEach((el) => el.remove());
+  }
+
+  async loadSettings(): Promise<void> {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
+  }
+
+  private registerCommands(): void {
+    const editorCmd = (id: string, name: string, fn: (ctx: actions.ActionContext) => void) => {
+      this.addCommand({
+        id,
+        name,
+        editorCallback: (editor: Editor) => {
+          const ctx = { editor, format: this.settings.outputFormat };
+          fn(ctx);
+        },
+      });
+    };
+
+    editorCmd("insert-row-above", t("cmd.insertRowAbove"), actions.insertRowAbove);
+    editorCmd("insert-row-below", t("cmd.insertRowBelow"), actions.insertRowBelow);
+    editorCmd("insert-col-left", t("cmd.insertColLeft"), actions.insertColLeft);
+    editorCmd("insert-col-right", t("cmd.insertColRight"), actions.insertColRight);
+    editorCmd("delete-row", t("cmd.deleteRow"), actions.deleteRow);
+    editorCmd("delete-col", t("cmd.deleteCol"), actions.deleteCol);
+    editorCmd("move-row-up", t("cmd.moveRowUp"), actions.moveRowUp);
+    editorCmd("move-row-down", t("cmd.moveRowDown"), actions.moveRowDown);
+    editorCmd("move-col-left", t("cmd.moveColLeft"), actions.moveColLeft);
+    editorCmd("move-col-right", t("cmd.moveColRight"), actions.moveColRight);
+    editorCmd("align-left", t("cmd.alignLeft"), (c) => actions.alignColumn(c, "left"));
+    editorCmd("align-center", t("cmd.alignCenter"), (c) => actions.alignColumn(c, "center"));
+    editorCmd("align-right", t("cmd.alignRight"), (c) => actions.alignColumn(c, "right"));
+    editorCmd("align-none", t("cmd.alignNone"), (c) => actions.alignColumn(c, "none"));
+    editorCmd("merge-up", t("cmd.mergeUp"), actions.mergeUp);
+    editorCmd("merge-down", t("cmd.mergeDown"), actions.mergeDown);
+    editorCmd("merge-left", t("cmd.mergeLeft"), actions.mergeLeft);
+    editorCmd("split-cell", t("cmd.splitCell"), actions.splitCell);
+    editorCmd("format-table", t("cmd.formatTable"), actions.formatTable);
+    editorCmd("sort-asc", t("cmd.sortAsc"), (c) => actions.sort(c, "asc"));
+    editorCmd("sort-desc", t("cmd.sortDesc"), (c) => actions.sort(c, "desc"));
+
+    // Open grid editor (works on the table at the cursor)
+    this.addCommand({
+      id: "open-grid-editor",
+      name: t("cmd.openGridEditor"),
+      editorCallback: () => this.openGridEditor(),
+    });
+
+    // Toggle floating toolbar
+    this.addCommand({
+      id: "toggle-floating-toolbar",
+      name: t("cmd.toggleFloating"),
+      callback: async () => {
+        this.settings.showFloatingToolbar = !this.settings.showFloatingToolbar;
+        await this.saveSettings();
+      },
+    });
+
+    // Insert new table directly (no grid editor)
+    this.addCommand({
+      id: "new-table",
+      name: t("cmd.newTable"),
+      editorCallback: (editor: Editor) => {
+        new NewTableModal(this.app, (spec) => {
+          actions.insertNewTable(
+            { editor, format: this.settings.outputFormat },
+            spec.rows,
+            spec.cols,
+            spec.hasHeader,
+          );
+        }).open();
+      },
+    });
+
+    // Design new table in the grid editor and insert at cursor on confirm.
+    this.addCommand({
+      id: "design-new-table",
+      name: t("cmd.designNewTable"),
+      editorCallback: (editor: Editor) => {
+        new NewTableModal(
+          this.app,
+          (spec) => {
+            const model = emptyModel(spec.rows, spec.cols);
+            if (!spec.hasHeader) model.headerRows = 0;
+            new GridEditorModal(this.app, model, (newModel) => {
+              actions.insertModelAtCursor(
+                { editor, format: this.settings.outputFormat },
+                newModel,
+              );
+            }).open();
+          },
+          t("newTable.design"),
+        ).open();
+      },
+    });
+
+    // Import table from clipboard (Excel / web)
+    this.addCommand({
+      id: "import-table-from-clipboard",
+      name: t("cmd.importTable"),
+      editorCallback: () => void this.importTableFromClipboard(),
+    });
+  }
+
+  /**
+   * Read a table from the system clipboard (HTML or TSV) and either replace
+   * the current table or insert a new one at the cursor. Reports outcome via
+   * an Obsidian notice.
+   */
+  async importTableFromClipboard(): Promise<void> {
+    const ctx = getActionContext(this.app, this);
+    if (!ctx) {
+      new Notice(t("notice.importFailed"));
+      return;
+    }
+    let result: Awaited<ReturnType<typeof actions.importTableFromClipboard>>;
+    try {
+      result = await actions.importTableFromClipboard(ctx);
+    } catch (_) {
+      new Notice(t("notice.importFailed"));
+      return;
+    }
+    if (!result) {
+      new Notice(t("notice.importNoTable"));
+      return;
+    }
+    new Notice(
+      t("notice.importDone", {
+        source: result.source === "html" ? "HTML" : "TSV",
+      }),
+    );
+  }
+
+  /** Public hook used by the floating toolbar and right-click menu. */
+  openGridEditor(): void {
+    const ctx = getActionContext(this.app, this);
+    if (!ctx) {
+      new Notice(t("notice.notInTable"));
+      return;
+    }
+    const loc = locateTable(ctx.editor);
+    if (!loc) {
+      new Notice(t("notice.notInTable"));
+      return;
+    }
+    let model: TableModel;
+    try {
+      model = parseTable(loc.text).model;
+    } catch (_) {
+      new Notice(t("notice.notInTable"));
+      return;
+    }
+    new GridEditorModal(this.app, model, (newModel) => {
+      actions.replaceTable(ctx, newModel);
+    }).open();
+  }
+
+  private warnIfConflictingPlugins(): void {
+    const enabled = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins?.enabledPlugins;
+    if (!enabled) return;
+    const found = CONFLICT_PLUGIN_IDS.filter((id) => enabled.has(id));
+    if (found.length === 0) return;
+    new Notice(t("notice.conflictPlugins", { plugins: found.join(", ") }), 8000);
+  }
+}
