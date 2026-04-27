@@ -1,7 +1,4 @@
 export const en = {
-  // Plugin
-  "plugin.name": "Table Master",
-
   // Commands
   "cmd.insertRowAbove": "Insert row above",
   "cmd.insertRowBelow": "Insert row below",
@@ -26,15 +23,15 @@ export const en = {
   "cmd.sortDesc": "Sort column descending",
   "cmd.openGridEditor": "Open grid editor",
   "cmd.toggleFloating": "Toggle floating toolbar",
-  "cmd.nextCell": "Next cell (Tab)",
-  "cmd.prevCell": "Previous cell (Shift-Tab)",
-  "cmd.newRowEnter": "New row (Enter)",
+  "cmd.nextCell": "Next cell",
+  "cmd.prevCell": "Previous cell",
+  "cmd.newRowEnter": "New row on enter",
   "cmd.newTable": "Insert new table…",
   "cmd.designNewTable": "Design new table in grid editor…",
   "cmd.insertCaption": "Set table caption…",
   "cmd.toggleHeader": "Toggle table header",
   "cmd.toggleTbodyBreak": "Toggle tbody break before this row",
-  "cmd.importTable": "Paste table from clipboard (Excel / web)",
+  "cmd.importTable": "Paste table from clipboard",
 
   // Toolbar tooltips
   "tip.insertRowAbove": "Insert row above",
@@ -56,7 +53,7 @@ export const en = {
   "tip.split": "Split cell",
   "tip.gridEditor": "Open grid editor",
   "tip.format": "Format",
-  "tip.importTable": "Paste table from clipboard (Excel / web)",
+  "tip.importTable": "Paste table from clipboard",
 
   // Modal
   "modal.title": "Table grid editor",
@@ -71,7 +68,7 @@ export const en = {
   "modal.alignRight": "Right",
   "modal.ok": "Apply",
   "modal.cancel": "Cancel",
-  "modal.hint": "Click to select a cell. Drag or Shift-click to select a range.",
+  "modal.hint": "Click to select a cell. Drag or shift-click to select a range.",
 
   // New table prompt
   "newTable.title": "Insert new table",
@@ -109,8 +106,8 @@ export const en = {
   "set.toolbarPosition.onClick": "Pop up at click position when clicking a table (default)",
   "set.toolbarPosition.followMouse": "Follow mouse inside table; top-left otherwise",
   "set.toolbarPosition.topLeft": "Always at the editor's top-left",
-  "set.tabNavigation": "Enable Tab navigation",
-  "set.tabNavigation.desc": "Use Tab / Shift-Tab / Enter to move between cells.",
+  "set.tabNavigation": "Enable tab navigation",
+  "set.tabNavigation.desc": "Use tab, shift-tab or enter to move between cells.",
   "set.defaultAlign": "Default column alignment",
   "set.language": "Interface language",
   "set.language.auto": "Auto",

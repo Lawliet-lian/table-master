@@ -117,8 +117,14 @@ async function renderCellsInline(
     try {
       // Newer Obsidian versions expose `render`; older ones `renderMarkdown`.
       // Both have signature (markdown, el, sourcePath, component).
-      const fn = (renderer as unknown as { render?: Function }).render
-        ?? (renderer as unknown as { renderMarkdown?: Function }).renderMarkdown;
+      type MarkdownRenderFn = (
+        markdown: string,
+        el: HTMLElement,
+        sourcePath: string,
+        component: Component,
+      ) => Promise<unknown>;
+      const fn = (renderer as unknown as { render?: MarkdownRenderFn }).render
+        ?? (renderer as unknown as { renderMarkdown?: MarkdownRenderFn }).renderMarkdown;
       if (typeof fn === "function") {
         await fn.call(renderer, text, td, opts.sourcePath, opts.component);
         unwrapTrailingParagraph(td);

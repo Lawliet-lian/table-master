@@ -27,7 +27,7 @@ function detectObsidianLocale(): string {
   if (w?.moment?.locale) {
     try {
       return w.moment.locale() ?? "en";
-    } catch (_) {
+    } catch {
       // ignore
     }
   }

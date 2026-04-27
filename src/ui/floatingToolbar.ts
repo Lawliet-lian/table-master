@@ -46,7 +46,11 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
         // whose CM6 destroy() hook didn't fire (Obsidian doesn't always
         // reconfigure already-open editor views on plugin unload).
         this.dom.dataset.tmFloatingToolbar = "1";
-        this.dom.style.display = "none";
+        // Hidden until refresh() decides to show it. Toggled via the
+        // `is-hidden` CSS class (defined in styles.css) rather than an inline
+        // `display` style — obsidianmd lint forbids static style.display
+        // assignments because they bypass theme overrides.
+        this.dom.classList.add("is-hidden");
         // Stop bubbling to avoid Obsidian re-focusing editor and dropping cursor
         this.dom.addEventListener("mousedown", (e) => e.preventDefault());
         // IMPORTANT: mount on <body>, not view.dom.parentElement. Some
@@ -232,8 +236,8 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
 
       /** Make the toolbar measurable & visible without leaving it at a stale position. */
       private ensureVisible() {
-        if (this.dom.style.display === "none") {
-          this.dom.style.display = "inline-flex";
+        if (this.dom.classList.contains("is-hidden")) {
+          this.dom.classList.remove("is-hidden");
           this.visible = true;
         }
       }
@@ -327,7 +331,7 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
 
       hide() {
         if (!this.visible) return;
-        this.dom.style.display = "none";
+        this.dom.classList.add("is-hidden");
         this.visible = false;
       }
 
@@ -339,7 +343,9 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
        */
       private placeTopLeft(view: EditorView) {
         const rect = view.dom.getBoundingClientRect();
-        this.dom.style.position = "fixed";
+        // `position: fixed` is declared in styles.css; we only set the dynamic
+        // top / left here. Inline display/position assignments would trip
+        // obsidianmd's no-static-styles-assignment rule.
         this.ensureVisible();
         this.dom.style.top = `${Math.max(rect.top, 0)}px`;
         this.dom.style.left = `${Math.max(rect.left, 0)}px`;
@@ -352,7 +358,8 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
        * toolbar is never partially off-screen.
        */
       private placeAtMouse() {
-        this.dom.style.position = "fixed";
+        // `position: fixed` lives in styles.css; only the dynamic top/left
+        // are set inline (see comment in placeTopLeft).
         this.ensureVisible();
         const myWidth = this.dom.offsetWidth || 200;
         const myHeight = this.dom.offsetHeight || 80;
@@ -413,7 +420,15 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
             const btn = g.createEl("button", { cls: "tm-btn" });
             btn.setAttribute("aria-label", item.tip);
             btn.title = item.tip;
-            btn.innerHTML = item.icon;
+            // Parse the bundled SVG via DOMParser instead of `innerHTML =` so
+            // the obsidianmd lint rule banning innerHTML/outerHTML writes is
+            // satisfied. The strings live in `Icons` and are entirely
+            // controlled by us, so the parser sees only trusted markup.
+            const parsedIcon = new DOMParser().parseFromString(item.icon, "image/svg+xml");
+            const iconEl = parsedIcon.documentElement;
+            if (iconEl && iconEl.nodeName.toLowerCase() === "svg") {
+              btn.appendChild(iconEl);
+            }
             btn.addEventListener("click", (e) => {
               e.preventDefault();
               e.stopPropagation();

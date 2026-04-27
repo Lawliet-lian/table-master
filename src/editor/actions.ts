@@ -30,7 +30,7 @@ function resolve(editor: Editor): ResolvedLocation | null {
   let model: TableModel;
   try {
     model = parseTable(loc.text).model;
-  } catch (_) {
+  } catch {
     new Notice(t("notice.notInTable"));
     return null;
   }
@@ -341,10 +341,10 @@ interface ClipboardPayload {
 
 async function readClipboardPayload(): Promise<ClipboardPayload | null> {
   // Modern path: navigator.clipboard.read() exposes both text/html and text/plain.
-  const nav = (typeof navigator !== "undefined" ? navigator : null) as Navigator | null;
+  const nav = typeof navigator !== "undefined" ? navigator : null;
   if (nav && "clipboard" in nav && typeof (nav.clipboard as Clipboard & { read?: () => Promise<ClipboardItem[]> }).read === "function") {
     try {
-      const items = await (nav.clipboard as Clipboard).read();
+      const items = await nav.clipboard.read();
       const out: ClipboardPayload = {};
       for (const item of items) {
         if (item.types.includes("text/html") && !out.html) {

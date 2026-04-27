@@ -25,7 +25,19 @@ const CONFLICT_PLUGIN_IDS = [
 export default class TableMasterPlugin extends Plugin {
   settings: TableMasterSettings = DEFAULT_SETTINGS;
 
-  async onload(): Promise<void> {
+  onload(): void {
+    // Obsidian's `Plugin.onload` signature is declared as `void` even though
+    // it accepts a Promise at runtime; declaring this method `async` makes
+    // typescript-eslint's `no-misused-promises` flag the override mismatch.
+    // Keep the wrapper synchronous and run the actual init in a fire-and-
+    // forget helper. We purposely register every editor extension and
+    // command immediately (without waiting for `loadSettings`) so plugin
+    // lifecycle is consistent; settings have a sane default value (see
+    // `DEFAULT_SETTINGS`) until the on-disk copy finishes loading.
+    void this.bootstrap();
+  }
+
+  private async bootstrap(): Promise<void> {
     await this.loadSettings();
     setLanguage(this.settings.language);
 
@@ -240,7 +252,7 @@ export default class TableMasterPlugin extends Plugin {
     let result: Awaited<ReturnType<typeof actions.importTableFromClipboard>>;
     try {
       result = await actions.importTableFromClipboard(ctx);
-    } catch (_) {
+    } catch {
       new Notice(t("notice.importFailed"));
       return;
     }
@@ -270,7 +282,7 @@ export default class TableMasterPlugin extends Plugin {
     let model: TableModel;
     try {
       model = parseTable(loc.text).model;
-    } catch (_) {
+    } catch {
       new Notice(t("notice.notInTable"));
       return;
     }

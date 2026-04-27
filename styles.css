@@ -1,8 +1,9 @@
 /* ===== Floating toolbar ===== */
 .tm-floating-toolbar {
-  /* Position is set imperatively by the view plugin; we mount on <body> and
-   * always switch to `position: fixed` so transformed editor ancestors
-   * cannot anchor the toolbar to themselves. */
+  /* We mount on <body> and rely on `position: fixed` so transformed editor
+   * ancestors cannot anchor the toolbar to themselves. (Position lives in
+   * CSS rather than inline styles; only the dynamic `top`/`left` are set
+   * imperatively by the view plugin.) */
   position: fixed;
   /* Some Obsidian themes bump table-widget z-index up into the 30-40s; keep
    * the toolbar above any of them so it's never visually buried. */
@@ -22,6 +23,14 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   font-size: var(--font-ui-smaller);
   user-select: none;
+}
+
+.tm-floating-toolbar.is-hidden {
+  /* Toggled by the view plugin via classList instead of inline display
+   * styles. `!important` is used so a theme that bumps `display` on
+   * `.tm-floating-toolbar` cannot accidentally re-show the toolbar while
+   * the plugin considers it hidden. */
+  display: none !important;
 }
 
 .tm-floating-toolbar .tm-group {

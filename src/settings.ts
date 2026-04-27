@@ -60,7 +60,9 @@ export class TableMasterSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: t("plugin.name") });
+    // Obsidian renders the plugin name as the settings-tab heading
+    // automatically, so we don't add a manual <h2> here (which would also
+    // trip `obsidianmd/settings-tab/no-manual-html-headings`).
 
     new Setting(containerEl)
       .setName(t("set.language"))

@@ -1,8 +1,6 @@
 import type { Dict } from "./en";
 
 export const zh: Dict = {
-  "plugin.name": "Table Master 表格大师",
-
   "cmd.insertRowAbove": "在上方插入行",
   "cmd.insertRowBelow": "在下方插入行",
   "cmd.insertColLeft": "在左侧插入列",
