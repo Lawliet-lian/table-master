@@ -99,8 +99,9 @@ export function buildLivePreviewExt() {
 /**
  * Apply the model's merge structure to an already-rendered `<table>` without
  * touching cell content. Anchor cells receive their `rowspan` / `colspan`
- * attributes; placeholder cells are visually removed via `display: none` so
- * the row/column geometry collapses around them.
+ * attributes; placeholder cells are visually removed via the
+ * `.tm-merge-placeholder` CSS class so the row/column geometry collapses
+ * around them.
  */
 function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
   const rows = Array.from(table.rows);
@@ -119,7 +120,7 @@ function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
         else td.removeAttribute("rowspan");
         if (modelCell.colspan > 1) td.setAttribute("colspan", String(modelCell.colspan));
         else td.removeAttribute("colspan");
-        if (td.style.display === "none") td.style.display = "";
+        td.classList.remove("tm-merge-placeholder");
         td.dataset.tmMerge = modelCell.rowspan > 1 || modelCell.colspan > 1 ? "anchor" : "";
         // Some Obsidian builds render raw `<br>` in a GFM table cell as plain
         // text instead of a real line break. Promote any literal `<br>` text
@@ -127,7 +128,7 @@ function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
         // visually break to a new line in Live Preview too.
         upgradeLiteralBrs(td);
       } else {
-        td.style.display = "none";
+        td.classList.add("tm-merge-placeholder");
         td.dataset.tmMerge = "placeholder";
       }
     }

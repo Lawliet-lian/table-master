@@ -33,6 +33,15 @@
   display: none !important;
 }
 
+/* Live Preview merged-cell placeholder: anchors keep their colspan/rowspan
+ * attributes, while the cells they cover are hidden via this class so the
+ * row/column geometry collapses around the anchor. Toggled in JS via
+ * classList instead of writing element.style.display directly. */
+table td.tm-merge-placeholder,
+table th.tm-merge-placeholder {
+  display: none !important;
+}
+
 .tm-floating-toolbar .tm-group {
   display: flex;
   align-items: center;
