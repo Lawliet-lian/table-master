@@ -103,7 +103,28 @@ export function buildLivePreviewExt() {
  * `.tm-merge-placeholder` CSS class so the row/column geometry collapses
  * around them.
  */
+function modelHasMerges(model: TableModel): boolean {
+  for (const row of model.rows) {
+    for (const cell of row) {
+      if (!cell.isAnchor) return true;
+      if (cell.rowspan > 1 || cell.colspan > 1) return true;
+    }
+  }
+  return false;
+}
+
 function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
+  if (!modelHasMerges(model)) {
+    // No merges — clean up any stale merge attributes from a previous pass
+    // (e.g. the source was re-matched after an edit that removed merges).
+    for (const td of Array.from(table.querySelectorAll<HTMLTableCellElement>("[data-tm-merge]"))) {
+      td.removeAttribute("colspan");
+      td.removeAttribute("rowspan");
+      td.classList.remove("tm-merge-placeholder");
+      delete td.dataset.tmMerge;
+    }
+    return;
+  }
   const rows = Array.from(table.rows);
   const rowLimit = Math.min(rows.length, model.rows.length);
   for (let r = 0; r < rowLimit; r++) {
@@ -213,6 +234,32 @@ function collectTableSources(lines: string[]): TableSource[] {
       continue;
     }
     if (looksLikeTableLine(line) || isSeparatorLine(line) || /^\s*\[[^\]]+\](?:\s*\[[^\]]+\])?\s*$/.test(line)) {
+      // A second separator line means a new table is starting — flush the
+      // previous one. Pop any header line(s) that belong to the new table.
+      if (isSeparatorLine(line) && hasSep) {
+        // Count how many non-blank, non-separator lines at the end of buf
+        // belong to the new table's header.
+        let headerCount = 0;
+        for (let j = buf.length - 1; j >= 0; j--) {
+          if (buf[j].trim() === "" || isSeparatorLine(buf[j])) break;
+          headerCount++;
+        }
+        const newHeaderLines = buf.splice(buf.length - headerCount, headerCount);
+        // Also trim trailing blanks from old table
+        while (buf.length && buf[buf.length - 1].trim() === "") {
+          buf.pop();
+          bufEnd--;
+        }
+        flush();
+        // Re-derive bufStart from i: header lines precede separator at line i
+        const headerStart = i - headerCount;
+        for (let k = 0; k < newHeaderLines.length; k++) {
+          if (!inTable) bufStart = headerStart + k;
+          buf.push(newHeaderLines[k]);
+          bufEnd = headerStart + k;
+          inTable = true;
+        }
+      }
       if (!inTable) bufStart = i;
       buf.push(line);
       bufEnd = i;

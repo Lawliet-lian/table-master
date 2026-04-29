@@ -47,6 +47,7 @@ export const zh: Dict = {
   "tip.alignLeft": "左对齐",
   "tip.alignCenter": "居中对齐",
   "tip.alignRight": "右对齐",
+  "tip.mergeSelection": "合并选区",
   "tip.mergeUp": "向上合并",
   "tip.mergeDown": "向下合并",
   "tip.mergeLeft": "向左合并",
@@ -54,6 +55,7 @@ export const zh: Dict = {
   "tip.gridEditor": "打开网格编辑器",
   "tip.format": "格式化",
   "tip.importTable": "从剪贴板导入表格（Excel / 网页）",
+  "tip.collapseToolbar": "收起 / 展开工具栏",
 
   "modal.title": "表格网格编辑器",
   "modal.merge": "合并",
@@ -88,6 +90,8 @@ export const zh: Dict = {
   "notice.importNoTable": "剪贴板中未识别到表格。",
   "notice.importDone": "已从剪贴板导入表格（{source}）。",
   "notice.importFailed": "读取剪贴板失败，请重试或手动粘贴。",
+  "notice.copiedToClipboard": "表格 Markdown 已复制到剪贴板。",
+  "notice.copyFailed": "无法写入剪贴板。",
 
   "set.outputFormat": "合并单元格输出格式",
   "set.outputFormat.desc":
@@ -99,7 +103,7 @@ export const zh: Dict = {
   "set.toolbarPosition": "浮动工具栏位置",
   "set.toolbarPosition.desc":
     "工具栏停靠方式。三种模式都使用 position: fixed，可以绕开主题或父容器的样式坑。",
-  "set.toolbarPosition.onClick": "点击表格时在点击处弹出（默认）",
+  "set.toolbarPosition.onClick": "平时左上角，点击表格时跳到点击处（默认）",
   "set.toolbarPosition.followMouse": "鼠标进入表格时跟随鼠标，平时停在编辑器左上角",
   "set.toolbarPosition.topLeft": "始终停在编辑器左上角",
   "set.tabNavigation": "启用 Tab 单元格跳转",

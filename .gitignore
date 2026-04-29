@@ -38,6 +38,7 @@ ehthumbs.db
 Desktop.ini
 
 # ---------- Test / coverage ----------
+tests/
 coverage/
 .nyc_output/
 *.lcov

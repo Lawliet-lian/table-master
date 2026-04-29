@@ -251,6 +251,50 @@ export function mergeLeft(ctx: ActionContext): void {
   applyModel(ctx, loc, m, { row: left.r, col: left.c });
 }
 
+/**
+ * Merge the rectangular region spanned by the editor's current selection.
+ * Both the selection start and end must be inside the same table.
+ */
+export function mergeSelection(ctx: ActionContext): void {
+  const from = ctx.editor.getCursor("from");
+  const to = ctx.editor.getCursor("to");
+  const loc = locateTable(ctx.editor, from);
+  if (!loc) {
+    new Notice(t("notice.notInTable"));
+    return;
+  }
+  // Resolve the "to" position to (row, col) within the same table block
+  const locTo = locateTable(ctx.editor, to);
+  if (!locTo || locTo.startLine !== loc.startLine) {
+    new Notice(t("notice.notInTable"));
+    return;
+  }
+  let model: TableModel;
+  try {
+    model = parseTable(loc.text).model;
+  } catch {
+    new Notice(t("notice.notInTable"));
+    return;
+  }
+  const r1 = loc.row;
+  const c1 = loc.col;
+  const r2 = locTo.row;
+  const c2 = locTo.col;
+  if (r1 < 0 || r2 < 0) return;
+  if (r1 === r2 && c1 === c2) {
+    new Notice(t("notice.invalidMerge"));
+    return;
+  }
+  const m = ops.mergeRange(model, r1, c1, r2, c2);
+  if (m === model) {
+    new Notice(t("notice.invalidMerge"));
+    return;
+  }
+  const topR = Math.min(r1, r2);
+  const topC = Math.min(c1, c2);
+  applyModel(ctx, loc, m, { row: topR, col: topC });
+}
+
 export function splitCell(ctx: ActionContext): void {
   const loc = resolve(ctx.editor);
   if (!loc) return;

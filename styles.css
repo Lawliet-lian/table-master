@@ -5,17 +5,17 @@
    * CSS rather than inline styles; only the dynamic `top`/`left` are set
    * imperatively by the view plugin.) */
   position: fixed;
-  /* Some Obsidian themes bump table-widget z-index up into the 30-40s; keep
-   * the toolbar above any of them so it's never visually buried. */
-  z-index: 100;
+  /* Stay above ordinary editor widgets but below Obsidian's modal/popover
+   * layers so a settings dialog (or any other Modal) is never visually
+   * buried by the toolbar. `--layer-popover` is well below `--layer-modal`
+   * in Obsidian, which gives us the right stacking order out of the box. */
+  z-index: var(--layer-popover, 30);
   pointer-events: auto;
-  /* Stack functional groups vertically — each group becomes its own row.
-   * The user explicitly asked for this layout so the toolbar is compact
-   * and not stretched across the full editor width. */
+  /* Row layout: content groups on the left, collapse toggle on the right. */
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: stretch;
-  gap: 2px;
+  gap: 0;
   padding: 4px;
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
@@ -31,6 +31,65 @@
    * `.tm-floating-toolbar` cannot accidentally re-show the toolbar while
    * the plugin considers it hidden. */
   display: none !important;
+}
+
+/* Inner wrapper that stacks functional groups vertically. 
+ * Has its own overflow:hidden so the collapse animation clips content
+ * without affecting the toggle button. */
+.tm-floating-toolbar .tm-toolbar-content {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  transition: width 0.3s ease, opacity 0.25s ease;
+}
+
+.tm-floating-toolbar.is-collapsed .tm-toolbar-content {
+  width: 0 !important;
+  opacity: 0;
+  padding: 0;
+  gap: 0;
+}
+
+/* Collapse toggle: right edge, vertically centered, same size as toolbar buttons. */
+.tm-floating-toolbar .tm-collapse-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  min-height: 26px;
+  padding: 4px;
+  margin-left: 2px;
+  border-left: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  flex-shrink: 0;
+  background: transparent;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  transition: margin 0.25s ease;
+}
+.tm-floating-toolbar .tm-collapse-toggle:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* When collapsed the toolbar slides left past the viewport; content stays in
+ * the DOM to preserve its measured width for the slide calculation. The
+ * viewport edge naturally clips it. */
+
+/* Toggle icon: same size as toolbar button icons + smooth rotation. */
+.tm-floating-toolbar .tm-collapse-toggle .tm-icon {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.3s ease;
+}
+.tm-floating-toolbar.is-collapsed .tm-collapse-toggle .tm-icon {
+  transform: rotate(180deg);
 }
 
 /* Live Preview merged-cell placeholder: anchors keep their colspan/rowspan
@@ -86,8 +145,15 @@ table th.tm-merge-placeholder {
 }
 
 /* ===== Modal grid editor ===== */
+.tm-modal {
+  /* Ensure the modal is wide enough that multi-column tables
+   * are never squeezed down to a single visible column. */
+  min-width: min(90vw, 600px);
+}
+
 .tm-modal .modal-content {
   padding: 0;
+  overflow: visible;
 }
 
 .tm-grid-toolbar {
@@ -112,8 +178,11 @@ table th.tm-merge-placeholder {
 
 table.tm-grid {
   border-collapse: collapse;
+  /* `table-layout: auto` lets the browser size columns to their content.
+   * `width: 100%` fills the wrapper; wider tables cause `.tm-grid-wrap`
+   * to scroll horizontally. */
+  table-layout: auto;
   width: 100%;
-  table-layout: fixed;
 }
 
 table.tm-grid th,

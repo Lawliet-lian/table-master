@@ -7,6 +7,7 @@ import * as actions from "./editor/actions";
 import { getActionContext } from "./editor/contextHelper";
 import { locateTable } from "./editor/tableLocator";
 import { parseTable } from "./table/parser";
+import { serialize } from "./table/serializer";
 import { navigateCell, navigateRowEnter } from "./editor/cellNavigator";
 import { buildFloatingToolbarExt } from "./ui/floatingToolbar";
 import { registerContextMenu } from "./ui/contextMenu";
@@ -43,7 +44,7 @@ export default class TableMasterPlugin extends Plugin {
 
     // Reading-view post-processor for merged cells
     this.registerMarkdownPostProcessor(
-      buildTableMergePostProcessor({ component: this }),
+      buildTableMergePostProcessor({ component: this, app: this.app }),
     );
 
     // Floating toolbar (CM6 ViewPlugin)
@@ -175,11 +176,13 @@ export default class TableMasterPlugin extends Plugin {
     editorCmd("sort-asc", t("cmd.sortAsc"), (c) => actions.sort(c, "asc"));
     editorCmd("sort-desc", t("cmd.sortDesc"), (c) => actions.sort(c, "desc"));
 
-    // Open grid editor (works on the table at the cursor)
+    // Open grid editor. Available everywhere — `openGridEditor` itself
+    // picks between editing the current table, designing a new one and
+    // inserting at the cursor, or designing one and copying to clipboard.
     this.addCommand({
       id: "open-grid-editor",
       name: t("cmd.openGridEditor"),
-      editorCallback: () => this.openGridEditor(),
+      callback: () => this.openGridEditor(),
     });
 
     // Toggle floating toolbar
@@ -267,28 +270,56 @@ export default class TableMasterPlugin extends Plugin {
     );
   }
 
-  /** Public hook used by the floating toolbar and right-click menu. */
+  /**
+   * Public hook used by the floating toolbar and right-click menu.
+   *
+   * Three modes, in order of preference:
+   *   1. Cursor inside a markdown table → open the grid editor on that
+   *      table; the modified model replaces the source on confirm.
+   *   2. Cursor in a markdown editor but not in a table → prompt for a new
+   *      table size, design it in the grid editor, then insert the result
+   *      at the cursor on confirm.
+   *   3. No active markdown editor at all (e.g. file explorer focused) →
+   *      same design flow but the resulting markdown is copied to the
+   *      clipboard so the user can paste it anywhere.
+   */
   openGridEditor(): void {
     const ctx = getActionContext(this.app, this);
-    if (!ctx) {
-      new Notice(t("notice.notInTable"));
-      return;
+
+    // Mode 1: edit the table the cursor is in.
+    if (ctx) {
+      const loc = locateTable(ctx.editor);
+      if (loc) {
+        let model: TableModel;
+        try {
+          model = parseTable(loc.text).model;
+        } catch {
+          new Notice(t("notice.notInTable"));
+          return;
+        }
+        new GridEditorModal(this.app, model, (newModel) => {
+          actions.replaceTable(ctx, newModel);
+        }).open();
+        return;
+      }
     }
-    const loc = locateTable(ctx.editor);
-    if (!loc) {
-      new Notice(t("notice.notInTable"));
-      return;
-    }
-    let model: TableModel;
-    try {
-      model = parseTable(loc.text).model;
-    } catch {
-      new Notice(t("notice.notInTable"));
-      return;
-    }
-    new GridEditorModal(this.app, model, (newModel) => {
-      actions.replaceTable(ctx, newModel);
-    }).open();
+
+    // Mode 2 / 3: design a fresh table, then either insert or copy.
+    new NewTableModal(this.app, (spec) => {
+      const blank = emptyModel(spec.rows, spec.cols);
+      if (!spec.hasHeader) blank.headerRows = 0;
+      new GridEditorModal(this.app, blank, (newModel) => {
+        if (ctx) {
+          actions.insertModelAtCursor(ctx, newModel);
+          return;
+        }
+        const md = serialize(newModel, this.settings.outputFormat);
+        navigator.clipboard
+          .writeText(md)
+          .then(() => new Notice(t("notice.copiedToClipboard")))
+          .catch(() => new Notice(t("notice.copyFailed")));
+      }).open();
+    }, t("newTable.design")).open();
   }
 
   private warnIfConflictingPlugins(): void {

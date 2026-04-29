@@ -47,6 +47,7 @@ export const en = {
   "tip.alignLeft": "Align left",
   "tip.alignCenter": "Align center",
   "tip.alignRight": "Align right",
+  "tip.mergeSelection": "Merge selected cells",
   "tip.mergeUp": "Merge ↑",
   "tip.mergeDown": "Merge ↓",
   "tip.mergeLeft": "Merge ←",
@@ -54,6 +55,7 @@ export const en = {
   "tip.gridEditor": "Open grid editor",
   "tip.format": "Format",
   "tip.importTable": "Paste table from clipboard",
+  "tip.collapseToolbar": "Collapse / expand toolbar",
 
   // Modal
   "modal.title": "Table grid editor",
@@ -91,6 +93,8 @@ export const en = {
   "notice.importNoTable": "Clipboard does not contain a recognizable table.",
   "notice.importDone": "Imported table from clipboard ({source}).",
   "notice.importFailed": "Could not read clipboard. Try again or paste manually.",
+  "notice.copiedToClipboard": "Table markdown copied to clipboard.",
+  "notice.copyFailed": "Could not write to clipboard.",
 
   // Settings
   "set.outputFormat": "Merged-cell output format",
@@ -103,7 +107,7 @@ export const en = {
   "set.toolbarPosition": "Floating toolbar position",
   "set.toolbarPosition.desc":
     "Where the action bar should anchor itself. All three modes use position: fixed, so they're reliable even when a custom theme would otherwise hide them.",
-  "set.toolbarPosition.onClick": "Pop up at click position when clicking a table (default)",
+  "set.toolbarPosition.onClick": "Top-left corner; jump to click position in table (default)",
   "set.toolbarPosition.followMouse": "Follow mouse inside table; top-left otherwise",
   "set.toolbarPosition.topLeft": "Always at the editor's top-left",
   "set.tabNavigation": "Enable tab navigation",

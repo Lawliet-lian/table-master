@@ -61,6 +61,7 @@ function padCell(s: string, width: number, align: Align): string {
 function cellToken(cell: Cell): string {
   if (cell.isAnchor) return cell.raw;
   if (cell.anchorRowOffset > 0) return "^^";
+  if (cell.anchorColOffset > 0) return "<";
   return cell.raw;
 }
 
@@ -74,7 +75,7 @@ function captionLine(model: TableModel): string | null {
 }
 
 function splitCellLines(cell: Cell): string[] {
-  if (isColspanPlaceholder(cell)) return [""];
+  if (isColspanPlaceholder(cell)) return ["<"];
   return cellToken(cell).split("\n");
 }
 
@@ -127,7 +128,8 @@ function formatRow(row: Cell[], widths: number[], aligns: Align[]): string[] {
     for (let c = 0; c < row.length; c++) {
       const cell = row[c];
       if (isColspanPlaceholder(cell)) {
-        line += "|";
+        const inner = padCell("<", widths[c] - 2, aligns[c] ?? "none");
+        line += `| ${inner} `;
         continue;
       }
       const tok = cellLines[c][lineIdx] ?? "";

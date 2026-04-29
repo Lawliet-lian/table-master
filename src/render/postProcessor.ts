@@ -5,6 +5,7 @@
 // Obsidian's GFM renderer.
 
 import {
+  App,
   Component,
   MarkdownPostProcessor,
   MarkdownPostProcessorContext,
@@ -14,6 +15,7 @@ import { isSeparatorLine, looksLikeTableLine, parseTable } from "../table/parser
 
 interface PostProcessorOptions {
   component: Component;
+  app: App;
 }
 
 export function buildTableMergePostProcessor(opts: PostProcessorOptions): MarkdownPostProcessor {
@@ -31,6 +33,7 @@ export function buildTableMergePostProcessor(opts: PostProcessorOptions): Markdo
         void applyModelToTable(table, model, {
           sourcePath: ctx.sourcePath,
           component: opts.component,
+          app: opts.app,
           renderInline: true,
         });
       } catch {
@@ -77,6 +80,20 @@ function collectTableSources(el: HTMLElement, ctx: MarkdownPostProcessorContext)
       continue;
     }
     if (looksLikeTableLine(line) || isSeparatorLine(line) || /^\s*\[[^\]]+\](?:\s*\[[^\]]+\])?\s*$/.test(line)) {
+      // A second separator line means a new table is starting — flush the
+      // previous one. We also remove any trailing blanks and the header line
+      // that was already buffered as part of the new table's header.
+      if (isSeparatorLine(line) && hasSep) {
+        // The line(s) between the last blank and this separator belong to the
+        // new table's header. Pop them off the old buffer and re-add after flush.
+        const newHeader: string[] = [];
+        while (buf.length && buf[buf.length - 1].trim() !== "" && !isSeparatorLine(buf[buf.length - 1])) {
+          newHeader.unshift(buf.pop()!);
+        }
+        while (buf.length && buf[buf.length - 1].trim() === "") buf.pop();
+        flush();
+        buf.push(...newHeader);
+      }
       buf.push(line);
       blanks = 0;
       inTable = true;

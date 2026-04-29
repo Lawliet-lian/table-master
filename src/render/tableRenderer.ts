@@ -2,13 +2,14 @@
 // (Obsidian-rendered) HTML table. Used by both the reading-view
 // post-processor and the live-preview view plugin.
 
-import type { Component, MarkdownRenderer as MdRenderer } from "obsidian";
+import type { App, Component, MarkdownRenderer as MdRenderer } from "obsidian";
 import { MarkdownRenderer } from "obsidian";
 import { TableModel } from "../table/model";
 
 export interface ApplyOptions {
   sourcePath: string;
   component: Component;
+  app?: App;
   /** Re-render markdown inside each anchor cell (lists, code blocks, etc). */
   renderInline?: boolean;
 }
@@ -115,18 +116,15 @@ async function renderCellsInline(
     td.innerHTML = "";
     const text = cell.raw.replace(/\\\n/g, "\n");
     try {
-      // Newer Obsidian versions expose `render`; older ones `renderMarkdown`.
-      // Both have signature (markdown, el, sourcePath, component).
-      type MarkdownRenderFn = (
-        markdown: string,
-        el: HTMLElement,
-        sourcePath: string,
-        component: Component,
-      ) => Promise<unknown>;
-      const fn = (renderer as unknown as { render?: MarkdownRenderFn }).render
-        ?? (renderer as unknown as { renderMarkdown?: MarkdownRenderFn }).renderMarkdown;
-      if (typeof fn === "function") {
-        await fn.call(renderer, text, td, opts.sourcePath, opts.component);
+      // Newer Obsidian versions expose `render(app, md, el, path, component)`;
+      // older ones `renderMarkdown(md, el, path, component)`.
+      const newRender = (renderer as unknown as { render?: (...args: unknown[]) => Promise<unknown> }).render;
+      const oldRender = (renderer as unknown as { renderMarkdown?: (...args: unknown[]) => Promise<unknown> }).renderMarkdown;
+      if (typeof newRender === "function" && opts.app) {
+        await newRender.call(renderer, opts.app, text, td, opts.sourcePath, opts.component);
+        unwrapTrailingParagraph(td);
+      } else if (typeof oldRender === "function") {
+        await oldRender.call(renderer, text, td, opts.sourcePath, opts.component);
         unwrapTrailingParagraph(td);
       } else {
         td.textContent = text;

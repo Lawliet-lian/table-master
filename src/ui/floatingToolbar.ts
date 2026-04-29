@@ -1,7 +1,13 @@
 // Floating toolbar for the active table. Implemented as a CM6 ViewPlugin so
 // it lives inside Obsidian's markdown editor and follows scroll / selection /
 // focus changes naturally. Three placement modes are supported (see
-// `FloatingToolbarPosition`): `on-click` (default), `follow-mouse`, `top-left`.
+// `FloatingToolbarPosition`):
+//   `on-click`      (default) — rests at the editor's top-left corner;
+//                     jumps to click position when clicking inside a table;
+//                     returns to top-left when clicking outside.
+//   `follow-mouse`  — follows the mouse pointer inside a table;
+//                     falls back to top-left otherwise.
+//   `top-left`      — always pinned to the editor's top-left corner.
 
 import { EditorView, ViewPlugin, ViewUpdate, PluginValue } from "@codemirror/view";
 import { App, MarkdownView } from "obsidian";
@@ -28,6 +34,20 @@ function activeMarkdownEditorView(app: App): EditorView | null {
 interface ToolbarHost {
   getApp(): App;
   getPlugin(): TableMasterPlugin;
+}
+
+interface ToolbarItem {
+  icon: string;
+  tip: string;
+  run: () => void;
+}
+
+function appendSvgIcon(parent: HTMLElement, icon: string): void {
+  const parsedIcon = new DOMParser().parseFromString(icon, "image/svg+xml");
+  const iconEl = parsedIcon.documentElement;
+  if (iconEl && iconEl.nodeName.toLowerCase() === "svg") {
+    parent.appendChild(iconEl);
+  }
 }
 
 export function buildFloatingToolbarExt(host: ToolbarHost) {
@@ -99,6 +119,9 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
       clientX = 0;
       clientY = 0;
       mouseInTable = false;
+      /** True while the on-click toolbar is positioned at the last click
+       *  point (inside a table). Cleared when the user clicks outside. */
+      clickedInTable = false;
       mouseListener: ((e: MouseEvent) => void) | null = null;
       mouseDownListener: ((e: MouseEvent) => void) | null = null;
       settingsListener: (() => void) | null = null;
@@ -206,11 +229,17 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
         // mode miss the first click after a mode switch.
         if (mode !== "follow-mouse" && mode !== "top-left") this.removeMouseListener();
 
-        // Mode `on-click` — visibility driven entirely by mousedown events.
-        // refresh() should NOT toggle visibility here; the listener already
-        // exists from construction time and decides on its own when to
-        // show / hide / reposition the toolbar.
+        // Mode `on-click` — toolbar rests at the editor's top-left corner
+        // and jumps to the click position when the user clicks inside a
+        // table; clicks outside any table snap it back to the corner.
+        // The mousedown listener (installed at construction time) handles
+        // the jump; refresh() keeps it parked at top-left the rest of the
+        // time.
         if (mode === "on-click") {
+          this.ensureVisible();
+          if (!this.clickedInTable) {
+            this.placeTopLeft(view);
+          }
           return;
         }
 
@@ -266,7 +295,7 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
             const rect = this.view.dom.getBoundingClientRect();
             if (rect.width === 0 || rect.height === 0) return;
             this.ensureVisible();
-            if (this.mouseInTable) {
+            if (this.mouseInTable && !this.dom.classList.contains("is-collapsed")) {
               this.placeAtMouse();
             } else {
               this.placeTopLeft(this.view);
@@ -313,10 +342,19 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
           if (target.closest("table")) {
             this.clientX = e.clientX;
             this.clientY = e.clientY;
+            this.clickedInTable = true;
             this.ensureVisible();
-            this.placeAtMouse();
+            // When collapsed, keep the toolbar pinned at top-left so the
+            // small toggle button doesn't jump around the viewport.
+            if (this.dom.classList.contains("is-collapsed")) {
+              this.placeTopLeft(this.view);
+            } else {
+              this.placeAtMouse();
+            }
           } else {
-            this.hide();
+            this.clickedInTable = false;
+            this.ensureVisible();
+            this.placeTopLeft(this.view);
           }
         };
         document.addEventListener("mousedown", fn, true);
@@ -343,12 +381,10 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
        */
       private placeTopLeft(view: EditorView) {
         const rect = view.dom.getBoundingClientRect();
-        // `position: fixed` is declared in styles.css; we only set the dynamic
-        // top / left here. Inline display/position assignments would trip
-        // obsidianmd's no-static-styles-assignment rule.
         this.ensureVisible();
+        const baseLeft = Math.max(rect.left, 0);
         this.dom.style.top = `${Math.max(rect.top, 0)}px`;
-        this.dom.style.left = `${Math.max(rect.left, 0)}px`;
+        this.dom.style.left = `${baseLeft}px`;
       }
 
       /**
@@ -373,11 +409,11 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
 
       render() {
         this.dom.empty();
-        const groups: Array<{
-          icon: string;
-          tip: string;
-          run: () => void;
-        }[]> = [
+
+        // Content wrapper holds all button groups.
+        const content = this.dom.createDiv({ cls: "tm-toolbar-content" });
+
+        const groups: ToolbarItem[][] = [
           [
             { icon: Icons.rowAbove, tip: t("tip.insertRowAbove"), run: () => this.act(actions.insertRowAbove) },
             { icon: Icons.rowBelow, tip: t("tip.insertRowBelow"), run: () => this.act(actions.insertRowBelow) },
@@ -398,6 +434,7 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
             { icon: Icons.alignRight, tip: t("tip.alignRight"), run: () => this.act((c) => actions.alignColumn(c, "right")) },
           ],
           [
+            { icon: Icons.mergeSelection, tip: t("tip.mergeSelection"), run: () => this.act(actions.mergeSelection) },
             { icon: Icons.mergeUp, tip: t("tip.mergeUp"), run: () => this.act(actions.mergeUp) },
             { icon: Icons.mergeDown, tip: t("tip.mergeDown"), run: () => this.act(actions.mergeDown) },
             { icon: Icons.mergeLeft, tip: t("tip.mergeLeft"), run: () => this.act(actions.mergeLeft) },
@@ -415,20 +452,12 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
         ];
 
         for (const group of groups) {
-          const g = this.dom.createDiv({ cls: "tm-group" });
+          const g = content.createDiv({ cls: "tm-group" });
           for (const item of group) {
             const btn = g.createEl("button", { cls: "tm-btn" });
             btn.setAttribute("aria-label", item.tip);
             btn.title = item.tip;
-            // Parse the bundled SVG via DOMParser instead of `innerHTML =` so
-            // the obsidianmd lint rule banning innerHTML/outerHTML writes is
-            // satisfied. The strings live in `Icons` and are entirely
-            // controlled by us, so the parser sees only trusted markup.
-            const parsedIcon = new DOMParser().parseFromString(item.icon, "image/svg+xml");
-            const iconEl = parsedIcon.documentElement;
-            if (iconEl && iconEl.nodeName.toLowerCase() === "svg") {
-              btn.appendChild(iconEl);
-            }
+            appendSvgIcon(btn, item.icon);
             btn.addEventListener("click", (e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -436,6 +465,39 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
             });
           }
         }
+
+        const toggleBtn = this.dom.createDiv({ cls: "tm-collapse-toggle" });
+        toggleBtn.setAttribute("aria-label", t("tip.collapseToolbar"));
+        toggleBtn.title = t("tip.collapseToolbar");
+        appendSvgIcon(toggleBtn, Icons.chevronLeft);
+        const lockContentSize = () => {
+          content.style.width = `${content.offsetWidth}px`;
+          content.style.height = `${content.offsetHeight}px`;
+          content.dataset.tmWidth = String(content.offsetWidth);
+          content.dataset.tmHeight = String(content.offsetHeight);
+        };
+        const unlockContentSize = () => {
+          if (this.dom.classList.contains("is-collapsed")) return;
+          content.style.width = "";
+          content.style.height = "";
+        };
+        toggleBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!this.dom.classList.contains("is-collapsed")) {
+            lockContentSize();
+            void content.offsetWidth;
+            this.dom.classList.add("is-collapsed");
+            // Pin to top-left so the collapsed toggle doesn't float mid-table.
+            this.placeTopLeft(this.view);
+            this.clickedInTable = false;
+          } else {
+            if (content.dataset.tmWidth) content.style.width = `${content.dataset.tmWidth}px`;
+            if (content.dataset.tmHeight) content.style.height = `${content.dataset.tmHeight}px`;
+            this.dom.classList.remove("is-collapsed");
+            setTimeout(unlockContentSize, 350);
+          }
+        });
       }
 
       act(fn: (ctx: actions.ActionContext) => void) {

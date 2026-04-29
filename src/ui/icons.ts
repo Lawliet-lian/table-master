@@ -26,9 +26,13 @@ export const Icons = {
   mergeUp: wrap('<rect x="4" y="4" width="16" height="7"/><rect x="4" y="13" width="16" height="7"/><path d="M9 9l3-3 3 3"/>'),
   mergeDown: wrap('<rect x="4" y="4" width="16" height="7"/><rect x="4" y="13" width="16" height="7"/><path d="M9 15l3 3 3-3"/>'),
   mergeLeft: wrap('<rect x="4" y="4" width="7" height="16"/><rect x="13" y="4" width="7" height="16"/><path d="M9 9l-3 3 3 3"/>'),
+  mergeSelection: wrap('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 8l4 4-4 4"/><path d="M16 8l-4 4 4 4"/>'),
   split: wrap('<rect x="3" y="3" width="18" height="18"/><path d="M3 12h18"/><path d="M12 3v18"/>'),
   grid: wrap('<rect x="3" y="3" width="18" height="18"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/>'),
   format: wrap('<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h16"/>'),
   // A clipboard with a small grid superimposed; signals "paste a table".
   importTable: wrap('<rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3"/><rect x="6" y="11" width="12" height="7"/><path d="M6 14.5h12"/><path d="M12 11v7"/>'),
+  // Chevron arrows for toolbar collapse/expand toggle.
+  chevronLeft: wrap('<polyline points="15 18 9 12 15 6"/>'),
+  chevronRight: wrap('<polyline points="9 18 15 12 9 6"/>'),
 };

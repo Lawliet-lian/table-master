@@ -149,6 +149,7 @@ function buildCell(parts: RowPart[], c: number, r: number): Cell {
   const part = parts[c];
   if (!part) return makeAnchor("");
   if (part.text === "^^" && r > 0) return makeMergeUp(1, 0);
+  if (part.text === "<" && c > 0) return makeMergeLeft(1, 0);
   if (part.text === "" && part.raw === "" && c > 0) return makeMergeLeft(1, 0);
   return makeAnchor(part.text);
 }

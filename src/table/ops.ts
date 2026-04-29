@@ -34,7 +34,6 @@ function splitVerticalMergesAcrossRow(model: TableModel, boundaryRow: number): T
     // Convert placeholder at (boundaryRow, c) into a new anchor; subsequent
     // placeholders below pointing into the original anchor must now point to
     // the new anchor.
-    const oldOffset = cell.anchorRowOffset;
     m.rows[boundaryRow][c] = makeAnchor("");
     for (let r = boundaryRow + 1; r < m.rows.length; r++) {
       const below = m.rows[r][c];
@@ -45,7 +44,6 @@ function splitVerticalMergesAcrossRow(model: TableModel, boundaryRow: number): T
         break;
       }
     }
-    void oldOffset;
   }
   recomputeSpans(m);
   return m;
@@ -56,6 +54,52 @@ function splitHorizontalMergesAcrossCol(model: TableModel, boundaryCol: number):
   const m = cloneModel(model);
   for (let r = 0; r < m.rows.length; r++) {
     if (boundaryCol <= 0 || boundaryCol >= m.cols) continue;
+    const cell = m.rows[r][boundaryCol];
+    if (cell.isAnchor || cell.anchorColOffset === 0) continue;
+    m.rows[r][boundaryCol] = makeAnchor("");
+    for (let c = boundaryCol + 1; c < m.cols; c++) {
+      const right = m.rows[r][c];
+      if (right.isAnchor) break;
+      if (right.anchorColOffset > 0 && c - right.anchorColOffset < boundaryCol) {
+        right.anchorColOffset = c - boundaryCol;
+      } else {
+        break;
+      }
+    }
+  }
+  recomputeSpans(m);
+  return m;
+}
+
+/** Like splitVerticalMergesAcrossRow but only for columns in [colFrom, colTo]. */
+function splitVerticalMergesInRange(model: TableModel, boundaryRow: number, colFrom: number, colTo: number): TableModel {
+  if (boundaryRow <= 0 || boundaryRow >= model.rows.length) return model;
+  const m = cloneModel(model);
+  for (let c = colFrom; c <= colTo; c++) {
+    if (c < 0 || c >= m.cols) continue;
+    const cell = m.rows[boundaryRow][c];
+    if (cell.isAnchor || cell.anchorRowOffset === 0) continue;
+    m.rows[boundaryRow][c] = makeAnchor("");
+    for (let r = boundaryRow + 1; r < m.rows.length; r++) {
+      const below = m.rows[r][c];
+      if (below.isAnchor) break;
+      if (below.anchorRowOffset > 0 && r - below.anchorRowOffset < boundaryRow) {
+        below.anchorRowOffset = r - boundaryRow;
+      } else {
+        break;
+      }
+    }
+  }
+  recomputeSpans(m);
+  return m;
+}
+
+/** Like splitHorizontalMergesAcrossCol but only for rows in [rowFrom, rowTo]. */
+function splitHorizontalMergesInRange(model: TableModel, boundaryCol: number, rowFrom: number, rowTo: number): TableModel {
+  if (boundaryCol <= 0 || boundaryCol >= model.cols) return model;
+  const m = cloneModel(model);
+  for (let r = rowFrom; r <= rowTo; r++) {
+    if (r < 0 || r >= m.rows.length) continue;
     const cell = m.rows[r][boundaryCol];
     if (cell.isAnchor || cell.anchorColOffset === 0) continue;
     m.rows[r][boundaryCol] = makeAnchor("");
@@ -188,11 +232,13 @@ export function mergeRange(
 
   // First, expand the region to include any merge regions partially inside it
   let { top: T, bottom: B, left: L, right: R } = expandToCoverMerges(model, top, bottom, left, right);
-  // Split merges that cross the expanded boundary (so cells outside stay valid)
-  let m = splitVerticalMergesAcrossRow(model, T);
-  m = splitVerticalMergesAcrossRow(m, B + 1);
-  m = splitHorizontalMergesAcrossCol(m, L);
-  m = splitHorizontalMergesAcrossCol(m, R + 1);
+  // Split merges that cross the expanded boundary, but only within the
+  // affected row/column range so unrelated merges outside the rectangle
+  // are not broken.
+  let m = splitVerticalMergesInRange(model, T, L, R);
+  m = splitVerticalMergesInRange(m, B + 1, L, R);
+  m = splitHorizontalMergesInRange(m, L, T, B);
+  m = splitHorizontalMergesInRange(m, R + 1, T, B);
   m = cloneModel(m);
 
   // Collect non-empty raw text in row-major order, separated by spaces

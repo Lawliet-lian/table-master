@@ -16,16 +16,22 @@ export class GridEditorModal extends Modal {
   private model: TableModel;
   private readonly originalModel: TableModel;
   private readonly onSubmit: (m: TableModel) => void;
-  private selection: Set<string> = new Set();
-  private dragging = false;
-  private dragStart: CellPos | null = null;
-  private gridEl: HTMLTableElement | null = null;
+  private selectedCells: Set<string>;
+  private dragging: boolean;
+  private dragStart: CellPos | null;
+  private gridEl: HTMLTableElement | null;
+  private boundMouseUp: () => void;
 
   constructor(app: App, model: TableModel, onSubmit: (m: TableModel) => void) {
     super(app);
     this.model = cloneModel(model);
     this.originalModel = cloneModel(model);
     this.onSubmit = onSubmit;
+    this.selectedCells = new Set<string>();
+    this.dragging = false;
+    this.dragStart = null;
+    this.gridEl = null;
+    this.boundMouseUp = () => this.handleMouseUp();
     this.modalEl.addClass("tm-modal");
   }
 
@@ -45,6 +51,7 @@ export class GridEditorModal extends Modal {
   }
 
   onClose(): void {
+    document.removeEventListener("mouseup", this.boundMouseUp);
     this.contentEl.empty();
   }
 
@@ -104,13 +111,13 @@ export class GridEditorModal extends Modal {
         });
         edit.addEventListener("keydown", (e) => this.onCellKey(e, r, c));
 
-        td.addEventListener("mousedown", (e) => this.onCellMouseDown(e, r, c));
-        td.addEventListener("mouseenter", (e) => this.onCellMouseEnter(e, r, c));
+        td.addEventListener("mousedown", (e) => this.handleCellMouseDown(e, r, c));
+        td.addEventListener("mouseenter", (e) => this.handleCellMouseEnter(e, r, c));
 
-        if (this.selection.has(this.key(r, c))) td.addClass("tm-selected");
+        if (this.selectedCells.has(this.key(r, c))) td.addClass("tm-selected");
       }
     }
-    document.addEventListener("mouseup", this.onMouseUp);
+    document.addEventListener("mouseup", this.boundMouseUp);
   }
 
   private renderActions(parent: HTMLElement): void {
@@ -131,15 +138,15 @@ export class GridEditorModal extends Modal {
   }
 
   private firstSelected(): CellPos | null {
-    if (!this.selection.size) return null;
-    const first = this.selection.values().next().value as string | undefined;
+    if (!this.selectedCells.size) return null;
+    const first = this.selectedCells.values().next().value as string | undefined;
     if (!first) return null;
     const [r, c] = first.split(":").map(Number);
     return { r, c };
   }
 
   private clearSelection(): void {
-    this.selection.clear();
+    this.selectedCells.clear();
     this.gridEl?.querySelectorAll(".tm-selected").forEach((el) => el.classList.remove("tm-selected"));
   }
 
@@ -147,8 +154,8 @@ export class GridEditorModal extends Modal {
     // Resolve to anchor (so clicking a placeholder selects its anchor cell)
     const a = anchorOf(this.model, r, c);
     const k = this.key(a.r, a.c);
-    if (this.selection.has(k)) return;
-    this.selection.add(k);
+    if (this.selectedCells.has(k)) return;
+    this.selectedCells.add(k);
     const td = this.gridEl?.querySelector(`[data-r="${a.r}"][data-c="${a.c}"]`);
     td?.classList.add("tm-selected");
   }
@@ -166,9 +173,9 @@ export class GridEditorModal extends Modal {
     }
   }
 
-  private onCellMouseDown = (e: MouseEvent, r: number, c: number): void => {
+  private handleCellMouseDown(e: MouseEvent, r: number, c: number): void {
     if ((e.target as HTMLElement).classList.contains("tm-cell-edit") && e.detail === 0) return;
-    if (e.shiftKey && this.selection.size > 0) {
+    if (e.shiftKey && this.selectedCells.size > 0) {
       const first = this.firstSelected();
       if (first) this.selectRange(first, { r, c });
       return;
@@ -177,16 +184,16 @@ export class GridEditorModal extends Modal {
     this.dragStart = { r, c };
     this.clearSelection();
     this.addToSelection(r, c);
-  };
+  }
 
-  private onCellMouseEnter = (_e: MouseEvent, r: number, c: number): void => {
+  private handleCellMouseEnter(_e: MouseEvent, r: number, c: number): void {
     if (!this.dragging || !this.dragStart) return;
     this.selectRange(this.dragStart, { r, c });
-  };
+  }
 
-  private onMouseUp = (): void => {
+  private handleMouseUp(): void {
     this.dragging = false;
-  };
+  }
 
   // --- Cell key handling ---
 
@@ -235,19 +242,19 @@ export class GridEditorModal extends Modal {
 
   private applyOp(fn: (m: TableModel) => TableModel): void {
     this.model = fn(this.model);
-    this.selection.clear();
+    this.selectedCells.clear();
     if (this.gridEl?.parentElement) {
       this.renderGrid(this.gridEl.parentElement);
     }
   }
 
   private mergeSelection(): void {
-    if (this.selection.size < 2) return;
+    if (this.selectedCells.size < 2) return;
     let top = Number.POSITIVE_INFINITY,
       bottom = -1,
       left = Number.POSITIVE_INFINITY,
       right = -1;
-    for (const k of this.selection) {
+    for (const k of this.selectedCells) {
       const [r, c] = k.split(":").map(Number);
       const anchor = this.model.rows[r][c];
       const er = r + (anchor.rowspan - 1);
@@ -274,9 +281,9 @@ export class GridEditorModal extends Modal {
   }
 
   private alignSelection(align: "left" | "center" | "right"): void {
-    if (!this.selection.size) return;
+    if (!this.selectedCells.size) return;
     const cols = new Set<number>();
-    for (const k of this.selection) cols.add(parseInt(k.split(":")[1], 10));
+    for (const k of this.selectedCells) cols.add(parseInt(k.split(":")[1], 10));
     this.applyOp((m) => {
       let next = m;
       for (const c of cols) next = ops.setColAlign(next, c, align);
@@ -287,7 +294,7 @@ export class GridEditorModal extends Modal {
   // Undo button hook — restore initial model
   resetModel(): void {
     this.model = cloneModel(this.originalModel);
-    this.selection.clear();
+    this.selectedCells.clear();
     if (this.gridEl?.parentElement) this.renderGrid(this.gridEl.parentElement);
   }
 }
