@@ -1,0 +1,74 @@
+name: Release Obsidian plugin
+
+# Triggers:
+#   * Pushing a tag (e.g. `git push origin 0.3.0`) — the standard release path.
+#   * Manual run via the Actions tab — useful for re-releasing an existing tag
+#     (or bootstrapping the first auto-release after adding this workflow).
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to (re-)release (e.g. 0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Sanity-check artefacts
+        run: |
+          test -f main.js
+          test -f manifest.json
+          test -f styles.css
+          # manifest.json version must match the tag — Obsidian's auto-update
+          # relies on that mapping. Fail loudly if they're out of sync.
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
+          if [ "$MANIFEST_VERSION" != "${{ steps.tag.outputs.tag }}" ]; then
+            echo "manifest.json version ($MANIFEST_VERSION) does not match tag (${{ steps.tag.outputs.tag }})" >&2
+            exit 1
+          fi
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" main.js manifest.json styles.css --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --generate-notes \
+              main.js manifest.json styles.css
+          fi
