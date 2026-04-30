@@ -295,6 +295,33 @@ export function mergeSelection(ctx: ActionContext): void {
   applyModel(ctx, loc, m, { row: topR, col: topC });
 }
 
+/**
+ * Merge a rectangular range of cells identified by explicit (row, col)
+ * bounds. Used by the Live Preview right-click interceptor where the
+ * selection comes from Obsidian's table widget DOM rather than from the
+ * editor's text selection.
+ */
+export function mergeCellRange(
+  ctx: ActionContext,
+  r1: number,
+  c1: number,
+  r2: number,
+  c2: number,
+): void {
+  const loc = resolve(ctx.editor);
+  if (!loc) return;
+  if (r1 === r2 && c1 === c2) {
+    new Notice(t("notice.invalidMerge"));
+    return;
+  }
+  const m = ops.mergeRange(loc.model, r1, c1, r2, c2);
+  if (m === loc.model) {
+    new Notice(t("notice.invalidMerge"));
+    return;
+  }
+  applyModel(ctx, loc, m, { row: Math.min(r1, r2), col: Math.min(c1, c2) });
+}
+
 export function splitCell(ctx: ActionContext): void {
   const loc = resolve(ctx.editor);
   if (!loc) return;

@@ -2,7 +2,7 @@
 // table. Cells are contenteditable; multi-cell selection enables Merge / Split
 // buttons. On confirmation the modified model is passed back via a callback.
 
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, setIcon, setTooltip } from "obsidian";
 import { TableModel, anchorOf, cloneModel } from "../table/model";
 import * as ops from "../table/ops";
 import { t } from "../i18n";
@@ -68,11 +68,33 @@ export class GridEditorModal extends Modal {
       b.addEventListener("click", fn);
       return b;
     };
+    const mkIconBtn = (icon: string, tip: string, fn: () => void): HTMLButtonElement => {
+      const b = bar.createEl("button", { cls: "tm-grid-icon-btn" });
+      setIcon(b, icon);
+      setTooltip(b, tip);
+      b.setAttribute("aria-label", tip);
+      b.addEventListener("click", fn);
+      return b;
+    };
 
     mkBtn(t("modal.merge"), () => this.mergeSelection());
     mkBtn(t("modal.split"), () => this.splitSelection());
-    mkBtn(t("modal.addRow"), () => this.applyOp((m) => ops.insertRow(m, this.model.rows.length - 1, "below")));
-    mkBtn(t("modal.addCol"), () => this.applyOp((m) => ops.insertCol(m, m.cols - 1, "right")));
+    mkIconBtn("arrow-up", t("cmd.insertRowAbove"), () => {
+      const row = this.selectionBounds()?.top ?? 0;
+      this.applyOp((m) => ops.insertRow(m, row, "above"));
+    });
+    mkIconBtn("arrow-down", t("cmd.insertRowBelow"), () => {
+      const row = this.selectionBounds()?.bottom ?? this.model.rows.length - 1;
+      this.applyOp((m) => ops.insertRow(m, row, "below"));
+    });
+    mkIconBtn("arrow-left", t("cmd.insertColLeft"), () => {
+      const col = this.selectionBounds()?.left ?? 0;
+      this.applyOp((m) => ops.insertCol(m, col, "left"));
+    });
+    mkIconBtn("arrow-right", t("cmd.insertColRight"), () => {
+      const col = this.selectionBounds()?.right ?? this.model.cols - 1;
+      this.applyOp((m) => ops.insertCol(m, col, "right"));
+    });
     mkBtn(t("modal.delRow"), () => {
       const row = this.firstSelected()?.r ?? this.model.rows.length - 1;
       this.applyOp((m) => ops.deleteRow(m, row));
@@ -84,6 +106,32 @@ export class GridEditorModal extends Modal {
     mkBtn(t("modal.alignLeft"), () => this.alignSelection("left"));
     mkBtn(t("modal.alignCenter"), () => this.alignSelection("center"));
     mkBtn(t("modal.alignRight"), () => this.alignSelection("right"));
+  }
+
+  /**
+   * Return the bounding rectangle of the current selection, expanded to
+   * cover any cells whose rowspan/colspan extends past the selected anchor.
+   * Returns `null` when nothing is selected.
+   */
+  private selectionBounds(): { top: number; bottom: number; left: number; right: number } | null {
+    if (!this.selectedCells.size) return null;
+    let top = Number.POSITIVE_INFINITY,
+      bottom = -1,
+      left = Number.POSITIVE_INFINITY,
+      right = -1;
+    for (const k of this.selectedCells) {
+      const [r, c] = k.split(":").map(Number);
+      const anchor = this.model.rows[r]?.[c];
+      if (!anchor) continue;
+      const er = r + (anchor.rowspan - 1);
+      const ec = c + (anchor.colspan - 1);
+      if (r < top) top = r;
+      if (c < left) left = c;
+      if (er > bottom) bottom = er;
+      if (ec > right) right = ec;
+    }
+    if (bottom < 0 || right < 0) return null;
+    return { top, bottom, left, right };
   }
 
   private renderGrid(parent: HTMLElement): void {

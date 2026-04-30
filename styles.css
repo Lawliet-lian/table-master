@@ -180,6 +180,18 @@ table th.tm-merge-placeholder {
   padding: 0 10px;
 }
 
+.tm-grid-toolbar button.tm-grid-icon-btn {
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tm-grid-toolbar button.tm-grid-icon-btn .svg-icon {
+  width: 16px;
+  height: 16px;
+}
+
 .tm-grid-wrap {
   max-height: 60vh;
   overflow: auto;

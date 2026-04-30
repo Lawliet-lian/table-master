@@ -11,6 +11,7 @@ import { serialize } from "./table/serializer";
 import { navigateCell, navigateRowEnter } from "./editor/cellNavigator";
 import { buildFloatingToolbarExt } from "./ui/floatingToolbar";
 import { registerContextMenu } from "./ui/contextMenu";
+import { buildTableWidgetContextMenuExt } from "./ui/tableWidgetMenu";
 import { buildTableMergePostProcessor } from "./render/postProcessor";
 import { buildLivePreviewExt } from "./render/livePreview";
 import { GridEditorModal } from "./ui/gridEditorModal";
@@ -98,8 +99,13 @@ export default class TableMasterPlugin extends Plugin {
       ),
     );
 
-    // Right-click menu
+    // Right-click menu — both the standard `editor-menu` event hook and a
+    // capture-phase DOM interceptor for Live Preview's table widget (which
+    // would otherwise swallow the right-click for its own built-in menu).
     registerContextMenu(this);
+    this.registerEditorExtension(
+      buildTableWidgetContextMenuExt({ getPlugin: () => this }),
+    );
 
     // When the user switches between markdown leaves (split panes, hover
     // editors, secondary tabs), Obsidian doesn't necessarily emit a CM6

@@ -15,6 +15,7 @@ export const zh: Dict = {
   "cmd.alignCenter": "居中对齐",
   "cmd.alignRight": "右对齐",
   "cmd.alignNone": "清除对齐",
+  "cmd.mergeSelection": "合并选中单元格",
   "cmd.mergeUp": "与上方单元格合并",
   "cmd.mergeDown": "与下方单元格合并",
   "cmd.mergeLeft": "与左侧单元格合并",

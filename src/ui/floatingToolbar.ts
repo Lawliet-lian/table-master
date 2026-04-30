@@ -16,6 +16,7 @@ import { Icons } from "./icons";
 import { t } from "../i18n";
 import * as actions from "../editor/actions";
 import { getActionContext } from "../editor/contextHelper";
+import { findActiveWidgetSelection } from "./tableWidgetMenu";
 
 /** Resolve the CM6 EditorView that is currently the *active* markdown editor.
  *  Returns null when the active workspace leaf isn't a markdown view (file
@@ -454,7 +455,23 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
             { icon: Icons.alignRight, tip: t("tip.alignRight"), run: () => this.act((c) => actions.alignColumn(c, "right")) },
           ],
           [
-            { icon: Icons.mergeSelection, tip: t("tip.mergeSelection"), run: () => this.act(actions.mergeSelection) },
+            {
+              icon: Icons.mergeSelection,
+              tip: t("tip.mergeSelection"),
+              // Prefer Obsidian's table-widget visual selection (Live Preview)
+              // when present, falling back to the editor's text selection.
+              // The widget's selection isn't reflected in the editor's text
+              // range, so calling actions.mergeSelection blindly would emit
+              // "selection is not a valid rectangle" inside the widget.
+              run: () => {
+                const range = findActiveWidgetSelection(host.getPlugin());
+                if (range) {
+                  this.act((c) => actions.mergeCellRange(c, range.r1, range.c1, range.r2, range.c2));
+                  return;
+                }
+                this.act(actions.mergeSelection);
+              },
+            },
             { icon: Icons.mergeUp, tip: t("tip.mergeUp"), run: () => this.act(actions.mergeUp) },
             { icon: Icons.mergeDown, tip: t("tip.mergeDown"), run: () => this.act(actions.mergeDown) },
             { icon: Icons.mergeLeft, tip: t("tip.mergeLeft"), run: () => this.act(actions.mergeLeft) },

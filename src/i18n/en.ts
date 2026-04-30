@@ -14,6 +14,7 @@ export const en = {
   "cmd.alignCenter": "Align center",
   "cmd.alignRight": "Align right",
   "cmd.alignNone": "Clear alignment",
+  "cmd.mergeSelection": "Merge selected cells",
   "cmd.mergeUp": "Merge with cell above",
   "cmd.mergeDown": "Merge with cell below",
   "cmd.mergeLeft": "Merge with cell to the left",
