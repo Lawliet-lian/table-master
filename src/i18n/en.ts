@@ -93,7 +93,7 @@ export const en = {
   "notice.importNoTable": "Clipboard does not contain a recognizable table.",
   "notice.importDone": "Imported table from clipboard ({source}).",
   "notice.importFailed": "Could not read clipboard. Try again or paste manually.",
-  "notice.copiedToClipboard": "Table markdown copied to clipboard.",
+  "notice.copiedToClipboard": "Table copied to clipboard as Markdown.",
   "notice.copyFailed": "Could not write to clipboard.",
 
   // Settings

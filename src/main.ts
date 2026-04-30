@@ -110,7 +110,7 @@ export default class TableMasterPlugin extends Plugin {
     // active leaf.
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
-        document.dispatchEvent(new CustomEvent("table-master:settings-changed"));
+        this.broadcastSettingsChanged();
       }),
     );
 
@@ -129,9 +129,19 @@ export default class TableMasterPlugin extends Plugin {
     // CodeMirror views when a plugin unloads, so any floating toolbars that
     // were attached to a markdown view's wrapper may otherwise leak. Remove
     // every DOM node we tagged on construction.
-    document
-      .querySelectorAll<HTMLElement>('[data-tm-floating-toolbar="1"]')
-      .forEach((el) => el.remove());
+    // We scan every document that hosts a markdown leaf (main + popout
+    // windows) — the bare `document` global only sees the main window, which
+    // would leak any toolbar that lives in a popout. obsidianmd's
+    // `prefer-active-doc` rule forbids that bare reference too.
+    const seen = new Set<Document>();
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const doc = leaf.view?.containerEl?.ownerDocument;
+      if (!doc || seen.has(doc)) return;
+      seen.add(doc);
+      doc
+        .querySelectorAll<HTMLElement>('[data-tm-floating-toolbar="1"]')
+        .forEach((el) => el.remove());
+    });
   }
 
   async loadSettings(): Promise<void> {
@@ -140,6 +150,25 @@ export default class TableMasterPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  /**
+   * Dispatch the `table-master:settings-changed` event into every document
+   * that hosts a markdown view. We can't rely on the global `document` (the
+   * obsidianmd lint rule forbids that bare reference, and it would also miss
+   * popout windows entirely), so we walk the workspace's leaves and emit the
+   * event on each unique `ownerDocument`. Each floating-toolbar instance
+   * subscribes to its own `view.dom.ownerDocument`, so this guarantees the
+   * broadcast reaches main + popout windows alike.
+   */
+  broadcastSettingsChanged(): void {
+    const seen = new Set<Document>();
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const doc = leaf.view?.containerEl?.ownerDocument;
+      if (!doc || seen.has(doc)) return;
+      seen.add(doc);
+      doc.dispatchEvent(new CustomEvent("table-master:settings-changed"));
+    });
   }
 
   private registerCommands(): void {

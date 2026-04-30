@@ -51,7 +51,10 @@ export class GridEditorModal extends Modal {
   }
 
   onClose(): void {
-    document.removeEventListener("mouseup", this.boundMouseUp);
+    // Use the modal's own ownerDocument so the listener is removed from the
+    // same document we attached it on (popout-window aware). obsidianmd's
+    // `prefer-active-doc` lint rule forbids the bare `document` global.
+    this.contentEl.ownerDocument.removeEventListener("mouseup", this.boundMouseUp);
     this.contentEl.empty();
   }
 
@@ -117,7 +120,9 @@ export class GridEditorModal extends Modal {
         if (this.selectedCells.has(this.key(r, c))) td.addClass("tm-selected");
       }
     }
-    document.addEventListener("mouseup", this.boundMouseUp);
+    // Pair with the removeEventListener in onClose; both use the modal's
+    // ownerDocument so the listener is correctly scoped to the same window.
+    this.contentEl.ownerDocument.addEventListener("mouseup", this.boundMouseUp);
   }
 
   private renderActions(parent: HTMLElement): void {

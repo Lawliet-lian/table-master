@@ -46,6 +46,16 @@
   transition: width 0.3s ease, opacity 0.25s ease;
 }
 
+/* While the collapse animation is in flight, the JS toggle adds
+ * `is-size-locked` and writes the measured size into CSS custom properties
+ * (`--tm-locked-width` / `--tm-locked-height`) via setCssProps. The class is
+ * removed (and the variables cleared) once the transition settles, so the
+ * content can reflow naturally on subsequent layout changes. */
+.tm-floating-toolbar .tm-toolbar-content.is-size-locked {
+  width: var(--tm-locked-width);
+  height: var(--tm-locked-height);
+}
+
 .tm-floating-toolbar.is-collapsed .tm-toolbar-content {
   width: 0 !important;
   opacity: 0;

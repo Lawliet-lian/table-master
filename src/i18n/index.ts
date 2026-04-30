@@ -21,9 +21,15 @@ export function setLanguage(choice: LangChoice): void {
 }
 
 function detectObsidianLocale(): string {
-  // Obsidian exposes the locale via window.moment.locale()
+  // Obsidian exposes the locale via activeWindow.moment.locale()
+  // (`activeWindow` is the popout-window-aware global Obsidian provides;
+  // referencing the bare `window` global would trip obsidianmd's
+  // `prefer-active-doc` lint rule).
   // Fall back to browser language.
-  const w = typeof window !== "undefined" ? (window as unknown as { moment?: { locale?: () => string } }) : undefined;
+  const w =
+    typeof activeWindow !== "undefined"
+      ? (activeWindow as unknown as { moment?: { locale?: () => string } })
+      : undefined;
   if (w?.moment?.locale) {
     try {
       return w.moment.locale() ?? "en";

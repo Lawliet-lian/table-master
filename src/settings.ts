@@ -20,17 +20,6 @@ export type FloatingToolbarPosition =
   | "follow-mouse"
   | "top-left";
 
-/**
- * Broadcast a "settings changed" event so every active floating-toolbar
- * instance can re-place itself immediately, without the user having to also
- * click in the editor to trigger a CM6 update.
- */
-function notifyToolbarPositionChange(): void {
-  if (typeof document !== "undefined") {
-    document.dispatchEvent(new CustomEvent("table-master:settings-changed"));
-  }
-}
-
 export interface TableMasterSettings {
   outputFormat: OutputFormat;
   showFloatingToolbar: boolean;
@@ -100,7 +89,7 @@ export class TableMasterSettingTab extends PluginSettingTab {
         tg.onChange(async (v) => {
           this.plugin.settings.showFloatingToolbar = v;
           await this.plugin.saveSettings();
-          notifyToolbarPositionChange();
+          this.plugin.broadcastSettingsChanged();
         });
       });
 
@@ -120,7 +109,7 @@ export class TableMasterSettingTab extends PluginSettingTab {
         dd.onChange(async (v) => {
           this.plugin.settings.floatingToolbarPosition = v as FloatingToolbarPosition;
           await this.plugin.saveSettings();
-          notifyToolbarPositionChange();
+          this.plugin.broadcastSettingsChanged();
         });
       });
 

@@ -60,7 +60,13 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
 
       constructor(view: EditorView) {
         this.view = view;
-        this.dom = document.createElement("div");
+        // Use the editor's own ownerDocument (and its defaultView) instead of
+        // the global `document` / `window` so the toolbar keeps working when
+        // the markdown view lives inside a popout window. obsidianmd's
+        // `prefer-active-doc` lint rule explicitly forbids referencing the
+        // bare `document` / `window` globals.
+        const doc = view.dom.ownerDocument;
+        this.dom = doc.createElement("div");
         this.dom.className = "tm-floating-toolbar";
         // Tagged so `TableMasterPlugin.onunload` can sweep up any toolbars
         // whose CM6 destroy() hook didn't fire (Obsidian doesn't always
@@ -80,12 +86,14 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
         // that ancestor instead of the viewport, which is why the user saw
         // the toolbar systematically offset to the bottom-right. <body> is
         // never inside such a transform, so fixed positioning is reliable.
-        document.body.appendChild(this.dom);
+        // We mount on the editor's own document body so popout windows get
+        // their own toolbar instead of one stranded in the main window.
+        doc.body.appendChild(this.dom);
         this.render();
         // Subscribe to settings broadcasts so the toolbar reacts to a position
         // change without requiring the user to also click in the editor.
         this.settingsListener = () => this.refresh(this.view);
-        document.addEventListener("table-master:settings-changed", this.settingsListener);
+        doc.addEventListener("table-master:settings-changed", this.settingsListener);
         // Track scroll on the editor's scroll container so the toolbar can
         // re-anchor itself if a future placement mode wants viewport-tied
         // coordinates. CM6's `viewportChanged` only fires when the rendered
@@ -100,7 +108,10 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
           });
         };
         view.scrollDOM.addEventListener("scroll", this.scrollListener, { passive: true });
-        window.addEventListener("scroll", this.scrollListener, { passive: true, capture: true });
+        // Listen on the view's own window so popout windows receive their
+        // own scroll events; the main `window` global wouldn't fire for them.
+        const win = doc.defaultView ?? activeWindow;
+        win.addEventListener("scroll", this.scrollListener, { passive: true, capture: true });
         // Install the on-click mousedown handler eagerly. It MUST exist before
         // the user's first click on a table — otherwise that click happens
         // while no listener is attached and the toolbar misses it. The handler
@@ -152,22 +163,26 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
       }
 
       destroy() {
+        // Mirror the constructor's choice of doc/win so add/remove pair on
+        // the same EventTarget even after the view has been detached.
+        const doc = this.view.dom.ownerDocument;
+        const win = doc.defaultView ?? activeWindow;
         this.dom.remove();
         if (this.mouseListener) {
           this.view.dom.removeEventListener("mousemove", this.mouseListener);
           this.mouseListener = null;
         }
         if (this.mouseDownListener) {
-          document.removeEventListener("mousedown", this.mouseDownListener, true);
+          doc.removeEventListener("mousedown", this.mouseDownListener, true);
           this.mouseDownListener = null;
         }
         if (this.settingsListener) {
-          document.removeEventListener("table-master:settings-changed", this.settingsListener);
+          doc.removeEventListener("table-master:settings-changed", this.settingsListener);
           this.settingsListener = null;
         }
         if (this.scrollListener) {
           this.view.scrollDOM.removeEventListener("scroll", this.scrollListener);
-          window.removeEventListener("scroll", this.scrollListener, true);
+          win.removeEventListener("scroll", this.scrollListener, true);
           this.scrollListener = null;
         }
         if (this.raf != null) {
@@ -357,13 +372,15 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
             this.placeTopLeft(this.view);
           }
         };
-        document.addEventListener("mousedown", fn, true);
+        // Listen on the view's own document so the on-click handler still
+        // fires when the editor lives inside a popout window.
+        this.view.dom.ownerDocument.addEventListener("mousedown", fn, true);
         this.mouseDownListener = fn;
       }
 
       private removeMouseDownListener() {
         if (!this.mouseDownListener) return;
-        document.removeEventListener("mousedown", this.mouseDownListener, true);
+        this.view.dom.ownerDocument.removeEventListener("mousedown", this.mouseDownListener, true);
         this.mouseDownListener = null;
       }
 
@@ -399,8 +416,11 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
         this.ensureVisible();
         const myWidth = this.dom.offsetWidth || 200;
         const myHeight = this.dom.offsetHeight || 80;
-        const maxLeft = window.innerWidth - myWidth - 4;
-        const maxTop = window.innerHeight - myHeight - 4;
+        // Clamp against the editor's own window so popout-window toolbars
+        // get the right viewport extents.
+        const win = this.view.dom.ownerDocument.defaultView ?? activeWindow;
+        const maxLeft = win.innerWidth - myWidth - 4;
+        const maxTop = win.innerHeight - myHeight - 4;
         const left = Math.min(Math.max(this.clientX, 4), Math.max(maxLeft, 4));
         const top = Math.min(Math.max(this.clientY, 4), Math.max(maxTop, 4));
         this.dom.style.top = `${top}px`;
@@ -470,16 +490,31 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
         toggleBtn.setAttribute("aria-label", t("tip.collapseToolbar"));
         toggleBtn.title = t("tip.collapseToolbar");
         appendSvgIcon(toggleBtn, Icons.chevronLeft);
+        // The collapse animation needs the content's natural size pinned for
+        // the duration of the transition (otherwise the flex child snaps
+        // straight to 0 with no animation). Rather than writing
+        // element.style.width/height directly — which obsidianmd's lint
+        // forbids — we publish the measured size as CSS custom properties via
+        // `setCssProps` and toggle a `.is-size-locked` class that consumes
+        // them (see styles.css).
         const lockContentSize = () => {
-          content.style.width = `${content.offsetWidth}px`;
-          content.style.height = `${content.offsetHeight}px`;
-          content.dataset.tmWidth = String(content.offsetWidth);
-          content.dataset.tmHeight = String(content.offsetHeight);
+          const w = content.offsetWidth;
+          const h = content.offsetHeight;
+          content.setCssProps({
+            "--tm-locked-width": `${w}px`,
+            "--tm-locked-height": `${h}px`,
+          });
+          content.dataset.tmWidth = String(w);
+          content.dataset.tmHeight = String(h);
+          content.classList.add("is-size-locked");
         };
         const unlockContentSize = () => {
           if (this.dom.classList.contains("is-collapsed")) return;
-          content.style.width = "";
-          content.style.height = "";
+          content.classList.remove("is-size-locked");
+          content.setCssProps({
+            "--tm-locked-width": "",
+            "--tm-locked-height": "",
+          });
         };
         toggleBtn.addEventListener("click", (e) => {
           e.preventDefault();
@@ -492,10 +527,18 @@ export function buildFloatingToolbarExt(host: ToolbarHost) {
             this.placeTopLeft(this.view);
             this.clickedInTable = false;
           } else {
-            if (content.dataset.tmWidth) content.style.width = `${content.dataset.tmWidth}px`;
-            if (content.dataset.tmHeight) content.style.height = `${content.dataset.tmHeight}px`;
+            if (content.dataset.tmWidth && content.dataset.tmHeight) {
+              content.setCssProps({
+                "--tm-locked-width": `${content.dataset.tmWidth}px`,
+                "--tm-locked-height": `${content.dataset.tmHeight}px`,
+              });
+              content.classList.add("is-size-locked");
+            }
             this.dom.classList.remove("is-collapsed");
-            setTimeout(unlockContentSize, 350);
+            // Use the view's own window timer so the cleanup still fires
+            // when the editor is in a popout window.
+            const win = this.view.dom.ownerDocument.defaultView ?? activeWindow;
+            win.setTimeout(unlockContentSize, 350);
           }
         });
       }

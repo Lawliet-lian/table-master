@@ -33,14 +33,19 @@ export function buildLivePreviewExt() {
 
       destroy() {
         if (this.timer != null) {
-          window.clearTimeout(this.timer);
+          // Use the editor's own window so the timer is cleared in popout
+          // windows too. Bare `window` would only resolve to the main window
+          // and trip obsidianmd's `prefer-active-doc` lint rule.
+          const win = this.view.dom.ownerDocument.defaultView ?? activeWindow;
+          win.clearTimeout(this.timer);
           this.timer = null;
         }
       }
 
       private schedule() {
         if (this.timer != null) return;
-        this.timer = window.setTimeout(() => {
+        const win = this.view.dom.ownerDocument.defaultView ?? activeWindow;
+        this.timer = win.setTimeout(() => {
           this.timer = null;
           this.run();
         }, 50);

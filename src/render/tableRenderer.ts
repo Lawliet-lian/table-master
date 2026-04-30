@@ -33,16 +33,22 @@ export async function applyModelToTable(
   table.className = className;
   table.classList.add("tm-rendered");
 
+  // Build new nodes through the table's own ownerDocument so the markup
+  // also lives in the right document tree when the markdown view is in a
+  // popout window. obsidianmd's `prefer-active-doc` lint rule additionally
+  // forbids referencing the bare `document` global.
+  const doc = table.ownerDocument;
+
   if (model.caption) {
-    const cap = document.createElement("caption");
+    const cap = doc.createElement("caption");
     cap.textContent = model.caption.text;
     table.appendChild(cap);
   }
 
   if (model.headerRows > 0) {
-    const thead = document.createElement("thead");
+    const thead = doc.createElement("thead");
     for (let r = 0; r < model.headerRows; r++) {
-      thead.appendChild(rowToTr(model, r, "th", opts));
+      thead.appendChild(rowToTr(doc, model, r, "th", opts));
     }
     table.appendChild(thead);
   }
@@ -52,10 +58,10 @@ export async function applyModelToTable(
     let tbody: HTMLTableSectionElement | null = null;
     for (let r = model.headerRows; r < model.rows.length; r++) {
       if (!tbody || breaks.has(r)) {
-        tbody = document.createElement("tbody");
+        tbody = doc.createElement("tbody");
         table.appendChild(tbody);
       }
-      tbody.appendChild(rowToTr(model, r, "td", opts));
+      tbody.appendChild(rowToTr(doc, model, r, "td", opts));
     }
   }
 
@@ -67,16 +73,17 @@ export async function applyModelToTable(
 }
 
 function rowToTr(
+  doc: Document,
   model: TableModel,
   r: number,
   tag: "th" | "td",
   opts: ApplyOptions,
 ): HTMLTableRowElement {
-  const tr = document.createElement("tr");
+  const tr = doc.createElement("tr");
   for (let c = 0; c < model.cols; c++) {
     const cell = model.rows[r][c];
     if (!cell.isAnchor) continue;
-    const td = document.createElement(tag);
+    const td = doc.createElement(tag);
     if (cell.rowspan > 1) td.setAttribute("rowspan", String(cell.rowspan));
     if (cell.colspan > 1) td.setAttribute("colspan", String(cell.colspan));
     const align = model.aligns[c];
@@ -89,8 +96,8 @@ function rowToTr(
       // takes over.
       const pieces = cell.raw.split("\n");
       pieces.forEach((piece, idx) => {
-        if (idx > 0) td.appendChild(document.createElement("br"));
-        td.appendChild(document.createTextNode(piece));
+        if (idx > 0) td.appendChild(doc.createElement("br"));
+        td.appendChild(doc.createTextNode(piece));
       });
     }
     tr.appendChild(td);
