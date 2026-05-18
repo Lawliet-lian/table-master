@@ -4,7 +4,7 @@
 // Cells may contain embedded newlines wrapped in double quotes (`"line 1\nline
 // 2"`); we honour that quoting per RFC 4180 with tab as the delimiter.
 
-import { Cell, TableModel, makeAnchor } from "./model";
+import { Align, Cell, TableModel, makeAnchor } from "./model";
 
 /** Try to parse a TSV string into a TableModel. Returns null when it doesn't
  *  look tabular (no tabs anywhere, no useful row separation). */
@@ -28,7 +28,7 @@ export function importTsvTable(tsv: string): TableModel | null {
   }
   return {
     rows: grid,
-    aligns: new Array(cols).fill("none"),
+    aligns: Array.from({ length: cols }, (): Align => "none"),
     headerRows: 1,
     cols,
     tbodyBreaks: [],

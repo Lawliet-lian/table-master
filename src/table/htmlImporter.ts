@@ -9,6 +9,7 @@
 // `^^` / `||` or HTML, depending on the user's setting.
 
 import {
+  Align,
   Cell,
   TableModel,
   makeAnchor,
@@ -81,6 +82,7 @@ function tableElementToModel(table: HTMLTableElement): TableModel | null {
 
   // Second pass: write actual content into the right anchor slot.
   const written: boolean[][] = Array.from({ length: rows }, () => []);
+  const aligns: Array<Align> = Array.from({ length: cols }, (): Align => "none");
   let headerRows = 0;
   for (let r = 0; r < trs.length; r++) {
     const cells = Array.from(trs[r].children).filter(
@@ -124,7 +126,7 @@ function tableElementToModel(table: HTMLTableElement): TableModel | null {
 
   const model: TableModel = {
     rows: grid,
-    aligns: new Array(cols).fill("none"),
+    aligns,
     headerRows,
     cols,
     tbodyBreaks: [],

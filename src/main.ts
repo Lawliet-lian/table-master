@@ -24,6 +24,30 @@ const CONFLICT_PLUGIN_IDS = [
   "table-extended",
 ];
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readSettings(data: unknown): Partial<TableMasterSettings> {
+  if (!isRecord(data)) return {};
+  const settings: Partial<TableMasterSettings> = {};
+  if (data.outputFormat === "extended" || data.outputFormat === "html") settings.outputFormat = data.outputFormat;
+  if (typeof data.showFloatingToolbar === "boolean") settings.showFloatingToolbar = data.showFloatingToolbar;
+  if (
+    data.floatingToolbarPosition === "on-click" ||
+    data.floatingToolbarPosition === "follow-mouse" ||
+    data.floatingToolbarPosition === "top-left"
+  ) {
+    settings.floatingToolbarPosition = data.floatingToolbarPosition;
+  }
+  if (typeof data.enableTabNavigation === "boolean") settings.enableTabNavigation = data.enableTabNavigation;
+  if (data.defaultAlign === "left" || data.defaultAlign === "center" || data.defaultAlign === "right" || data.defaultAlign === "none") {
+    settings.defaultAlign = data.defaultAlign;
+  }
+  if (data.language === "auto" || data.language === "en" || data.language === "zh") settings.language = data.language;
+  return settings;
+}
+
 export default class TableMasterPlugin extends Plugin {
   settings: TableMasterSettings = DEFAULT_SETTINGS;
 
@@ -151,7 +175,8 @@ export default class TableMasterPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data: unknown = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, readSettings(data));
   }
 
   async saveSettings(): Promise<void> {

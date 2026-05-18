@@ -82,7 +82,7 @@ function splitCellLines(cell: Cell): string[] {
 export function serializeExtended(model: TableModel): string {
   recomputeSpans(model);
   const cols = model.cols;
-  const widths: number[] = new Array(cols).fill(3);
+  const widths = Array.from({ length: cols }, (): number => 3);
   for (const row of model.rows) {
     for (let c = 0; c < cols; c++) {
       const cell = row[c];

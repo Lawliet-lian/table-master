@@ -26,11 +26,7 @@
 }
 
 .tm-floating-toolbar.is-hidden {
-  /* Toggled by the view plugin via classList instead of inline display
-   * styles. `!important` is used so a theme that bumps `display` on
-   * `.tm-floating-toolbar` cannot accidentally re-show the toolbar while
-   * the plugin considers it hidden. */
-  display: none !important;
+  display: none;
 }
 
 /* Inner wrapper that stacks functional groups vertically. 
@@ -57,7 +53,7 @@
 }
 
 .tm-floating-toolbar.is-collapsed .tm-toolbar-content {
-  width: 0 !important;
+  width: 0;
   opacity: 0;
   padding: 0;
   gap: 0;
@@ -108,7 +104,7 @@
  * classList instead of writing element.style.display directly. */
 table td.tm-merge-placeholder,
 table th.tm-merge-placeholder {
-  display: none !important;
+  display: none;
 }
 
 .tm-floating-toolbar .tm-group {
