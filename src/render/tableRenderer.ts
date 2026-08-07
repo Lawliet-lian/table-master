@@ -39,6 +39,24 @@ export async function applyModelToTable(
   // forbids referencing the bare `document` global.
   const doc = table.ownerDocument;
 
+  // Emit a <colgroup> up front so per-column widths can be applied before
+  // any cell content is painted. This matches standard HTML table rendering and
+  // avoids content jumping during layout. Only write explicit widths when the
+  // caller actually declared colWidths; otherwise we leave the browser to its
+  // own auto-width strategy (matches "undefined = never set widths" semantics).
+  if (model.colWidths && model.colWidths.length === model.cols) {
+    const colgroup = doc.createElement("colgroup");
+    for (let c = 0; c < model.cols; c++) {
+      const col = doc.createElement("col");
+      const width = model.colWidths[c];
+      if (Number.isFinite(width) && Number.isInteger(width)) {
+        col.style.width = `${width}px`;
+      }
+      colgroup.appendChild(col);
+    }
+    table.appendChild(colgroup);
+  }
+
   if (model.caption) {
     const cap = doc.createElement("caption");
     cap.textContent = model.caption.text;
@@ -159,6 +177,10 @@ function modelSignature(model: TableModel): string {
     String(model.cols),
     JSON.stringify(model.tbodyBreaks ?? []),
     model.caption ? `${model.caption.text}|${model.caption.label ?? ""}` : "",
+    // Include colWidths explicitly so that “only the widths were edited” is
+    // still considered a new signature; otherwise the post-processor would
+    // early-exit and the new <colgroup> would never be painted.
+    JSON.stringify(model.colWidths ?? []),
   ];
   for (const row of model.rows) {
     const cells = row.map((cell) =>

@@ -7,6 +7,7 @@ import {
   makeMergeLeft,
   makeMergeUp,
   recomputeSpans,
+  MIN_COL_WIDTH,
 } from "./model";
 
 interface RowPart {
@@ -96,6 +97,40 @@ function parseCaption(line: string): TableCaption | null {
   return { text: m[1], label: m[2] };
 }
 
+/**
+ * 校验某行是否为 Table Master 的列宽持久化注释。
+ * 注释格式固定为：
+ *   <!-- tm-colwidths: 120|180|240 -->
+ * 允许前后空白。
+ */
+export function isColWidthsLine(line: string): boolean {
+  return /^\s*<!--\s*tm-colwidths\s*:\s*[^\n]*?-->\s*$/.test(line);
+}
+
+/**
+ * 解析列宽注释为数字数组。
+ * 阶段一只接受非负整数像素值，且每项必须 >= MIN_COL_WIDTH。
+ * 若任何一项非法或数组为空，则整体视为无效，返回 null。
+ */
+export function parseColWidths(line: string): number[] | null {
+  if (!isColWidthsLine(line)) return null;
+  const m = line.trim().match(/^<!--\s*tm-colwidths\s*:\s*([^\n]*?)\s*-->$/);
+  if (!m || !m[1]) return null;
+  const raw = m[1].trim();
+  if (!raw) return null;
+  const parts = raw.split("|");
+  const out: number[] = [];
+  for (const part of parts) {
+    const token = part.trim();
+    if (!/^\d+$/.test(token)) return null;
+    const n = Number(token);
+    if (!Number.isFinite(n) || n < MIN_COL_WIDTH) return null;
+    out.push(n);
+  }
+  if (out.length === 0) return null;
+  return out;
+}
+
 function hasContinuation(line: string): boolean {
   const s = line.trimEnd();
   let count = 0;
@@ -165,6 +200,17 @@ export function parseTable(text: string): ParseResult {
 
   if (rawLines.length < 2) throw new Error("Not enough lines for a table");
 
+  // 阶段一只支持“列宽注释紧邻表格上方”的持久化格式，避免下方元数据与 caption 位置组合引入的复杂度。
+  // 因此这里先尝试从表头提取 colWidths，并在构建逻辑表前剥离该注释行。
+  let colWidths: number[] | undefined;
+  if (rawLines.length > 1) {
+    const maybe = parseColWidths(rawLines[0]);
+    if (maybe) {
+      colWidths = maybe;
+      rawLines.shift();
+    }
+  }
+
   let caption: TableCaption | undefined;
   const firstCaption = parseCaption(rawLines[0]);
   if (firstCaption && rawLines.length > 1) {
@@ -219,6 +265,10 @@ export function parseTable(text: string): ParseResult {
     logicalRow++;
   }
 
+  // 列宽数组仅在长度严格等于列数时才生效，否则丢弃，避免后续编辑链路出现越界或错位。
+  const normalizedColWidths: number[] | undefined =
+    colWidths && colWidths.length === cols ? colWidths : undefined;
+
   const model: TableModel = {
     rows: grid,
     aligns,
@@ -226,6 +276,7 @@ export function parseTable(text: string): ParseResult {
     cols,
     caption,
     tbodyBreaks,
+    colWidths: normalizedColWidths,
   };
   recomputeSpans(model);
   return { model, warnings };

@@ -3,7 +3,13 @@
 // buttons. On confirmation the modified model is passed back via a callback.
 
 import { App, Modal, Notice, setIcon, setTooltip } from "obsidian";
-import { TableModel, anchorOf, cloneModel } from "../table/model";
+import {
+  TableModel,
+  anchorOf,
+  cloneModel,
+  DEFAULT_COL_WIDTH,
+  MIN_COL_WIDTH,
+} from "../table/model";
 import * as ops from "../table/ops";
 import { t } from "../i18n";
 
@@ -22,6 +28,25 @@ export class GridEditorModal extends Modal {
   private gridEl: HTMLTableElement | null;
   private boundMouseUp: () => void;
 
+  // --- Column width resize state (stage 4, only lives inside the modal) ---
+  /**
+   * The widths that the modal operates on. We mirror `model.colWidths` here
+   * so every pointer drag can mutate the in-memory widths and repaint, but
+   * the surrounding Markdown file is *not* touched until the user confirms
+   * via the “应用 / OK” button. This follows the plan's stage-4 constraint
+   * “only the OK button writes to Markdown”.
+   */
+  private colWidths: number[];
+  /** True while a column-width drag is in effect. */
+  private resizingCol: number | null;
+  /** Initial clientX at the start of a column resize gesture. */
+  private resizeStartX: number;
+  /** Initial pixel width of the column being resized (before clamping). */
+  private resizeStartWidth: number;
+  /** The `pointermove` / `pointerup` handlers attached during a resize drag. */
+  private boundResizeMove: ((e: PointerEvent) => void) | null;
+  private boundResizeUp: ((e: PointerEvent) => void) | null;
+
   constructor(app: App, model: TableModel, onSubmit: (m: TableModel) => void) {
     super(app);
     this.model = cloneModel(model);
@@ -33,6 +58,33 @@ export class GridEditorModal extends Modal {
     this.gridEl = null;
     this.boundMouseUp = () => this.handleMouseUp();
     this.modalEl.addClass("tm-modal");
+
+    // Initialise / normalise column widths. Stage 1 intentionally keeps
+    // `model.colWidths` as `undefined` for historical notes to keep the diff
+    // noise low, but once the user opens the grid editor we guarantee a
+    // concrete numeric array is present so the renderer + resize handles can
+    // operate without extra null checks. Missing entries are filled with
+    // DEFAULT_COL_WIDTH; oversized / non-finite entries are clamped to the
+    // allowed range. Length is forced equal to `model.cols` so ops never
+    // desync.
+    const existing = Array.isArray(this.model.colWidths)
+      ? this.model.colWidths.slice(0, this.model.cols)
+      : [];
+    while (existing.length < this.model.cols) existing.push(DEFAULT_COL_WIDTH);
+    this.colWidths = existing.map((w) => {
+      const num = Number.isFinite(w) ? (w as number) : DEFAULT_COL_WIDTH;
+      return Math.max(MIN_COL_WIDTH, Math.round(num));
+    });
+    // Persist the normalised array back onto `this.model` so subsequent calls
+    // to applyOp/merge/etc through the modal always operate on a model that
+    // already has colWidths, which keeps op-level undefined guards simple.
+    this.model.colWidths = this.colWidths.slice();
+
+    // Resize event handlers bound once so we can consistently add/remove them
+    // from the modal's ownerDocument. Both are null safe during onClose even
+    // if no drag ever started.
+    this.boundResizeMove = (e) => this.handleResizeMove(e);
+    this.boundResizeUp = (e) => this.handleResizeUp(e);
   }
 
   onOpen(): void {
@@ -54,7 +106,10 @@ export class GridEditorModal extends Modal {
     // Use the modal's own ownerDocument so the listener is removed from the
     // same document we attached it on (popout-window aware). obsidianmd's
     // `prefer-active-doc` lint rule forbids the bare `document` global.
-    this.contentEl.ownerDocument.removeEventListener("mouseup", this.boundMouseUp);
+    const doc = this.contentEl.ownerDocument;
+    doc.removeEventListener("mouseup", this.boundMouseUp);
+    if (this.boundResizeMove) doc.removeEventListener("pointermove", this.boundResizeMove);
+    if (this.boundResizeUp) doc.removeEventListener("pointerup", this.boundResizeUp);
     this.contentEl.empty();
   }
 
@@ -138,13 +193,23 @@ export class GridEditorModal extends Modal {
     parent.empty();
     const table = parent.createEl("table", { cls: "tm-grid" });
     this.gridEl = table;
+    // Emit a <colgroup> with inline widths so the visual layout exactly
+    // reflects the in-memory `this.colWidths` that the user is editing.
+    // Without this, the browser would auto-size columns and the drag handles
+    // would not match where the user actually drags.
+    const colgroup = table.createEl("colgroup");
+    for (let c = 0; c < this.model.cols; c++) {
+      const col = colgroup.createEl("col");
+      col.style.width = `${this.colWidths[c]}px`;
+    }
 
     for (let r = 0; r < this.model.rows.length; r++) {
       const tr = table.createEl("tr");
       for (let c = 0; c < this.model.cols; c++) {
         const cell = this.model.rows[r][c];
         if (!cell.isAnchor) continue;
-        const td = tr.createEl(r < this.model.headerRows ? "th" : "td");
+        const isHeaderRow = r < this.model.headerRows;
+        const td = tr.createEl(isHeaderRow ? "th" : "td");
         if (cell.rowspan > 1) td.setAttr("rowspan", String(cell.rowspan));
         if (cell.colspan > 1) td.setAttr("colspan", String(cell.colspan));
         td.dataset.r = String(r);
@@ -166,11 +231,90 @@ export class GridEditorModal extends Modal {
         td.addEventListener("mouseenter", (e) => this.handleCellMouseEnter(e, r, c));
 
         if (this.selectedCells.has(this.key(r, c))) td.addClass("tm-selected");
+
+        // Only the LAST header row receives the visible resize handle strip
+        // at its right edge; this keeps the grid compact while still letting
+        // every column be resized. When headerRows === 0 we skip handles
+        // entirely — an unusual case but we degrade gracefully instead of
+        // crashing or rendering detached strips.
+        if (isHeaderRow && r === this.model.headerRows - 1) {
+          // Map the column C (anchor col) to the last visual column that
+          // this anchor cell spans, because the handle must live at the
+          // right edge of the cell. For single-column cells this equals c.
+          const lastColIdx = c + (cell.colspan - 1);
+          // Never attach a handle for the very last column's right edge;
+          // there is nothing there to resize and it would sit on the modal
+          // chrome. We only draw handles between columns 0..cols-2.
+          if (lastColIdx < this.model.cols - 1) {
+            const handle = td.createDiv({ cls: "tm-col-resizer" });
+            setTooltip(handle, t("modal.resizeCol"));
+            handle.setAttribute("role", "separator");
+            handle.setAttribute("aria-label", t("modal.resizeCol"));
+            handle.dataset.col = String(lastColIdx);
+            handle.addEventListener("pointerdown", (e) => this.startResize(e, lastColIdx));
+          }
+        }
       }
     }
     // Pair with the removeEventListener in onClose; both use the modal's
     // ownerDocument so the listener is correctly scoped to the same window.
     this.contentEl.ownerDocument.addEventListener("mouseup", this.boundMouseUp);
+  }
+
+  // --- Column width resizing (stage 4; only OK button writes back) ---
+
+  /**
+   * Begin a column-width drag on the resize handle next to column `col`.
+   * We capture the pointer on the handle element and listen to pointermove/up
+   * on the modal's ownerDocument so the drag continues even when the pointer
+   * leaves the handle / table surface.
+   */
+  private startResize(e: PointerEvent, col: number): void {
+    if (col < 0 || col >= this.model.cols - 1) return;
+    if (!this.boundResizeMove || !this.boundResizeUp) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture?.(e.pointerId);
+    this.resizingCol = col;
+    this.resizeStartX = e.clientX;
+    this.resizeStartWidth = Number(this.colWidths[col]);
+    this.gridEl?.classList.add("tm-col-resizing");
+    const doc = this.contentEl.ownerDocument;
+    doc.addEventListener("pointermove", this.boundResizeMove);
+    doc.addEventListener("pointerup", this.boundResizeUp, { once: false });
+  }
+
+  private handleResizeMove(e: PointerEvent): void {
+    if (this.resizingCol == null) return;
+    const delta = e.clientX - this.resizeStartX;
+    const next = Math.max(MIN_COL_WIDTH, Math.round(this.resizeStartWidth + delta));
+    if (this.colWidths[this.resizingCol] === next) return;
+    this.colWidths[this.resizingCol] = next;
+    // Reflect the new width immediately onto the existing <colgroup> so the
+    // user sees the table grow/shrink in real time during the drag instead of
+    // waiting for renderGrid() — rebuilding the whole DOM mid-drag would lose
+    // pointer capture, flicker and feel sluggish.
+    const cols = this.gridEl?.querySelectorAll<HTMLTableColElement>("colgroup > col");
+    if (cols && cols[this.resizingCol]) {
+      cols[this.resizingCol].style.width = `${next}px`;
+    }
+  }
+
+  private handleResizeUp(e: PointerEvent): void {
+    if (this.resizingCol == null) return;
+    const target = e.currentTarget as HTMLElement;
+    target?.releasePointerCapture?.(e.pointerId);
+    this.gridEl?.classList.remove("tm-col-resizing");
+    const doc = this.contentEl.ownerDocument;
+    if (this.boundResizeMove) doc.removeEventListener("pointermove", this.boundResizeMove);
+    if (this.boundResizeUp) doc.removeEventListener("pointerup", this.boundResizeUp);
+    // Copy the in-memory widths back onto the model so when OK is pressed the
+    // serializer will emit them. We intentionally do NOT call
+    // `applyOp`/`renderGrid` here because the width was already painted on
+    // the live <colgroup>, and re-building the DOM would flicker.
+    this.model.colWidths = this.colWidths.slice();
+    this.resizingCol = null;
   }
 
   private renderActions(parent: HTMLElement): void {
@@ -296,6 +440,21 @@ export class GridEditorModal extends Modal {
   private applyOp(fn: (m: TableModel) => TableModel): void {
     this.model = fn(this.model);
     this.selectedCells.clear();
+    // After ops that may insert / delete / move columns we must re-sync the
+    // modal's own `colWidths` mirror with `model.colWidths`. The ops layer
+    // already handles the lifetime (insertCol inserts DEFAULT_COL_WIDTH etc.)
+    // when the model already has colWidths, which the constructor guarantees.
+    // We still clamp + pad defensively here so a half-initialised model
+    // (e.g. through future changes) can never break the UI renderer.
+    const widths = Array.isArray(this.model.colWidths)
+      ? this.model.colWidths.slice(0, this.model.cols)
+      : [];
+    while (widths.length < this.model.cols) widths.push(DEFAULT_COL_WIDTH);
+    this.colWidths = widths.map((w) => {
+      const num = Number.isFinite(w) ? (w as number) : DEFAULT_COL_WIDTH;
+      return Math.max(MIN_COL_WIDTH, Math.round(num));
+    });
+    this.model.colWidths = this.colWidths.slice();
     if (this.gridEl?.parentElement) {
       this.renderGrid(this.gridEl.parentElement);
     }

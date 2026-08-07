@@ -72,6 +72,8 @@ export const en = {
   "modal.ok": "Apply",
   "modal.cancel": "Cancel",
   "modal.hint": "Click to select a cell. Drag or shift-click to select a range.",
+  "modal.resizeCol":
+    "Drag the right edge to resize this column (minimum 80 px; saved only after Apply)",
 
   // New table prompt
   "newTable.title": "Insert new table",

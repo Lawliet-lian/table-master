@@ -71,6 +71,7 @@ export const zh: Dict = {
   "modal.ok": "应用",
   "modal.cancel": "取消",
   "modal.hint": "点击选择单元格，拖拽或按住 Shift 选中区域。",
+  "modal.resizeCol": "拖拽右侧边缘调整该列宽度（最小 80 像素，点击应用后保存）",
 
   "newTable.title": "插入新表格",
   "newTable.rows": "行数",

@@ -2,7 +2,7 @@
 //   - "extended": GFM table with Table Extended `^^` / `<` placeholders for merged cells
 //   - "html":     raw <table> with colspan/rowspan attributes
 
-import { Align, Cell, TableModel, recomputeSpans } from "./model";
+import { Align, Cell, TableModel, recomputeSpans, MIN_COL_WIDTH } from "./model";
 
 export type OutputFormat = "extended" | "html";
 
@@ -74,6 +74,20 @@ function captionLine(model: TableModel): string | null {
   return model.caption.label ? `[${model.caption.text}][${model.caption.label}]` : `[${model.caption.text}]`;
 }
 
+/**
+ * 生成列宽持久化注释行。
+ * 输出严格前置校验：数组存在、长度等于列数、每一项都是合法整数且 >= MIN_COL_WIDTH。
+ * 任何一项不满足都不输出注释，避免写出下游 parser 会判定为非法的元数据。
+ */
+function colWidthsLine(model: TableModel): string | null {
+  if (!model.colWidths) return null;
+  if (model.colWidths.length !== model.cols) return null;
+  for (const w of model.colWidths) {
+    if (!Number.isFinite(w) || w < MIN_COL_WIDTH || !Number.isInteger(w)) return null;
+  }
+  return `<!-- tm-colwidths: ${model.colWidths.join("|")} -->`;
+}
+
 function splitCellLines(cell: Cell): string[] {
   if (isColspanPlaceholder(cell)) return ["<"];
   return cellToken(cell).split("\n");
@@ -100,7 +114,18 @@ export function serializeExtended(model: TableModel): string {
   }
 
   const lines: string[] = [];
+  // 固定输出顺序：列宽注释 -> caption -> 表格主体，保证序列化稳定，也与 parseTable 的解析顺序一致。
+  const cw = colWidthsLine(model);
   const cap = captionLine(model);
+  if (cw) {
+    lines.push(cw);
+    // Obsidian Live Preview / 源码视图下，HTML 块注释若与下一行 GFM 表头紧挨着会被一并纳入
+    // paragraph 块，导致表格无法被渲染为 <table>（阅读模式无此问题）。
+    // 规避策略：当“有 colWidths 注释且没有 caption（即注释下一行直接是 | 表头行 / separator）”
+    // 时，在注释与表头之间插 1 行空行，形成 Obsidian 要求的块边界；若存在 caption，则 caption
+    // 本身能充当“结构块边界”，不需要额外空行，保持视觉紧凑。
+    if (!cap) lines.push("");
+  }
   if (cap) lines.push(cap);
 
   for (let r = 0; r < model.headerRows; r++) {
@@ -145,7 +170,17 @@ function formatRow(row: Cell[], widths: number[], aligns: Align[]): string[] {
 
 export function serializeHtml(model: TableModel): string {
   recomputeSpans(model);
-  const lines: string[] = ["<table>"];
+  const lines: string[] = [];
+  // 即使选择 HTML 输出，也把列宽注释写在 <table> 之前，保证切换输出格式时元数据不会丢失。
+  // HTML 路径下 caption 被内嵌到 <caption> 里，不会像扩展格式那样作为独立行出现在源文件中，
+  // 因此这里只要写出了 colWidths 注释，就固定与 <table> 之间空一行，保持 Obsidian 对 HTML
+  // 块的块边界判定稳定，避免“HTML 注释紧邻 <table>”时出现的非预期段落拼接。
+  const cw = colWidthsLine(model);
+  if (cw) {
+    lines.push(cw);
+    lines.push("");
+  }
+  lines.push("<table>");
   if (model.caption) lines.push(`<caption>${escapeHtml(model.caption.text)}</caption>`);
   if (model.headerRows > 0) {
     lines.push("<thead>");

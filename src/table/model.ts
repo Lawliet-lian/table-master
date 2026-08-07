@@ -2,6 +2,20 @@
 
 export type Align = "left" | "center" | "right" | "none";
 
+// 列宽持久化的默认与边界常量，阶段一先只在数据层定义。
+// 注：像素宽度统一为正整数，渲染层可在后续阶段使用这些常量做归一化。
+//
+// 这里的最小宽度是“全局硬下限”：
+// - 阅读模式应用 colgroup 时会参考它过滤非法宽度；
+// - 网格编辑器拖拽时会把列宽 clamp 到这个值以上；
+// - Live Preview overlay 拖拽时也会用它作为最终兜底。
+//
+// 用户当前希望让窄列（例如“编号”）可以继续缩小，所以把下限从 80 调整到 20。
+// 这样三条渲染/编辑链路会保持一致，不会出现“LP 能拖到 20，但网格编辑器又弹回 80”
+// 之类的语义分叉。
+export const MIN_COL_WIDTH = 20;
+export const DEFAULT_COL_WIDTH = 160;
+
 /**
  * Logical cell. The grid is "expanded": every (row, col) position has a cell.
  * Anchor cells are the visible ones; non-anchor cells are placeholders that
@@ -38,6 +52,12 @@ export interface TableModel {
   cols: number;
   caption?: TableCaption;
   tbodyBreaks: number[];
+  /**
+   * 可选：每列的显式像素宽度。
+   * 当数组存在时长度必须等于 cols；值为像素整数，且不小于 MIN_COL_WIDTH。
+   * undefined 表示该表没有被用户显式设置过列宽，渲染层应回退到自动宽度。
+   */
+  colWidths?: number[];
 }
 
 /** Build a normal anchor cell. */
@@ -102,6 +122,8 @@ export function cloneModel(m: TableModel): TableModel {
     cols: m.cols,
     caption: m.caption ? { ...m.caption } : undefined,
     tbodyBreaks: [...(m.tbodyBreaks ?? [])],
+    // 列宽数组为 number[]，浅拷贝即可，同时保持 undefined 语义不变。
+    colWidths: m.colWidths ? [...m.colWidths] : undefined,
   };
 }
 

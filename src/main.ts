@@ -84,7 +84,11 @@ export default class TableMasterPlugin extends Plugin {
     // toggles rowspan/colspan attributes and hides placeholder cells, so it
     // does not interfere with Obsidian's table widget the way a full DOM
     // rebuild would.
-    this.registerEditorExtension(buildLivePreviewExt());
+    this.registerEditorExtension(
+      buildLivePreviewExt({
+        getOutputFormat: () => this.settings.outputFormat,
+      }),
+    );
 
     // Tab / Shift-Tab / Enter navigation inside tables
     this.registerEditorExtension(

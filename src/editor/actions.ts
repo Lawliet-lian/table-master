@@ -5,6 +5,7 @@
 import { Editor, Notice } from "obsidian";
 import { locateTable, TableLocation } from "./tableLocator";
 import { isSeparatorLine, parseTable } from "../table/parser";
+import { isCaptionLine, isColWidthsLine } from "../table/structural";
 import { serialize, OutputFormat } from "../table/serializer";
 import { TableModel, anchorOf, emptyModel } from "../table/model";
 import * as ops from "../table/ops";
@@ -77,16 +78,21 @@ function computeCursorPos(
 ): { line: number; ch: number } | null {
   if (text.startsWith("<table")) return null; // HTML output, can't place per-cell.
   const lines = text.split("\n");
-  // Walk the serialized text and count logical rows, skipping the caption,
-  // separator and blank tbody-break lines so the new MultiMarkdown layout maps
-  // back to the original cell coordinates.
+  // Walk the serialized text and count logical rows, skipping colWidths
+  // comment, caption, separator and blank tbody-break lines so the new
+  // MultiMarkdown layout maps back to the original cell coordinates.
+  //
+  // Reusing the structural helpers (isColWidthsLine / isCaptionLine) from
+  // table/structural here keeps behaviour identical to what locateTable uses
+  // for logical row counting.
   let logical = -1;
   let lineIdx = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (isSeparatorLine(line)) continue;
     if (line.trim() === "") continue;
-    if (/^\s*\[[^\]]+\](?:\s*\[[^\]]+\])?\s*$/.test(line)) continue;
+    if (isCaptionLine(line)) continue;
+    if (isColWidthsLine(line)) continue;
     logical++;
     if (logical === row) {
       lineIdx = i;

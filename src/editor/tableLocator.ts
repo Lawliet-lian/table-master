@@ -4,7 +4,8 @@
 // CodeMirror internal changes.
 
 import type { Editor, EditorPosition } from "obsidian";
-import { isSeparatorLine, looksLikeTableLine, splitRow } from "../table/parser";
+import { isSeparatorLine, looksLikeTableLine, splitRow, isColWidthsLine } from "../table/parser";
+import { isCaptionLine, isStructuralTableLine } from "../table/structural";
 
 export interface TableLocation {
   /** First line index (0-based) of the table block (header). */
@@ -24,17 +25,12 @@ function getLine(editor: Editor, n: number): string | null {
   return editor.getLine(n);
 }
 
-export function isCaptionLine(line: string): boolean {
-  return /^\s*\[[^\]]+\](?:\s*\[[^\]]+\])?\s*$/.test(line);
-}
-
+export { isCaptionLine } from "../table/structural";
+export { isColWidthsLine } from "../table/parser";
 export function isTableContextLine(line: string): boolean {
   return looksLikeTableLine(line) || isSeparatorLine(line);
 }
-
-export function isStructuralTableLine(line: string): boolean {
-  return isTableContextLine(line) || isCaptionLine(line);
-}
+export { isStructuralTableLine } from "../table/structural";
 
 export interface TableBlock {
   startLine: number;
@@ -96,16 +92,35 @@ export function findTableBlock(
     return null;
   }
 
-  // 2) Extend up from sepLine. Header / caption lines must be contiguous; a
-  //    blank line means the table ends there. Crossing another separator is
-  //    forbidden so the previous table can't be glued on.
+  // 2) Extend up from sepLine. Allowed preceding items are header rows, the
+  //    caption line, and a colWidths comment line. A single blank line between
+  //    the colWidths comment and the header/caption is also allowed (we emit
+  //    one in serializeExtended when there is no caption to keep Obsidian LP
+  //    table rendering happy). Two consecutive blanks or a non-structural line
+  //    ends the block, so adjacent tables cannot be glued together.
   let start = sepLine;
+  let allowOneBlank = true;
   while (start > 0) {
     const prev = getLineFn(start - 1);
     if (prev == null) break;
     if (isSeparatorLine(prev)) break;
-    if (!isStructuralTableLine(prev)) break;
-    start--;
+    if (isStructuralTableLine(prev)) {
+      start--;
+      allowOneBlank = true;
+      continue;
+    }
+    if (prev.trim() === "" && allowOneBlank && start - 1 > 0) {
+      const prevPrev = getLineFn(start - 2);
+      // Only consume the blank if it’s followed by *another* structural
+      // header/metadata line — never swallow blanks that lead to another
+      // separator (that would be a different table above).
+      if (prevPrev != null && isStructuralTableLine(prevPrev) && !isSeparatorLine(prevPrev)) {
+        start--;
+        allowOneBlank = false;
+        continue;
+      }
+    }
+    break;
   }
 
   // 3) Extend down from sepLine. Single blank acts as tbody-break only when
@@ -164,15 +179,22 @@ export function locateTable(editor: Editor, pos?: EditorPosition): TableLocation
   const lines: string[] = [];
   for (let i = start; i <= end; i++) lines.push(getLine(editor, i) ?? "");
 
-  // Compute logical (row, col) for the cursor; skip captions, separators and blank lines.
+  // Compute logical (row, col) for the cursor; skip captions, colWidth comments,
+  // separators and blank tbody-break lines so the row/col index matches TableModel.
   const cursorLine = getLine(editor, cursor.line) ?? "";
   let row = -1;
-  if (!isSeparatorLine(cursorLine) && !isCaptionLine(cursorLine) && cursorLine.trim() !== "") {
+  if (
+    !isSeparatorLine(cursorLine) &&
+    !isCaptionLine(cursorLine) &&
+    !isColWidthsLine(cursorLine) &&
+    cursorLine.trim() !== ""
+  ) {
     let logical = -1;
     for (let i = start; i <= cursor.line; i++) {
       const line = getLine(editor, i) ?? "";
       if (isSeparatorLine(line)) continue;
       if (isCaptionLine(line)) continue;
+      if (isColWidthsLine(line)) continue;
       if (line.trim() === "") continue;
       logical++;
       if (i === cursor.line) {

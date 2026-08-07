@@ -107,6 +107,73 @@ table th.tm-merge-placeholder {
   display: none;
 }
 
+/* ===== Live Preview column-width overlay (stage 5) =====
+ * Overlay handles live on <body>, not inside the CodeMirror table widget.
+ * This keeps LP stable: we only move fixed-position overlay affordances and a
+ * managed <colgroup> inside the existing table, never rebuild the widget DOM.
+ */
+.tm-lp-col-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--layer-popover, 30);
+}
+
+.tm-lp-col-overlay.is-visible {
+  pointer-events: none;
+}
+
+.tm-lp-col-overlay.is-dragging {
+  cursor: col-resize;
+}
+
+.tm-lp-col-overlay .tm-lp-col-handle {
+  position: fixed;
+  width: 12px;
+  margin-left: -6px;
+  pointer-events: auto;
+  cursor: col-resize;
+  touch-action: none;
+  /* Draw a subtle 2px center line permanently so the handle is discoverable
+   * without needing a pixel-perfect hover. The outer 12px hot zone stays
+   * transparent, so the line reads like a spreadsheet divider rather than a
+   * thick overlay bar. */
+  background:
+    linear-gradient(
+      to right,
+      transparent calc(50% - 1px),
+      color-mix(in srgb, var(--interactive-accent) 28%, transparent) calc(50% - 1px),
+      color-mix(in srgb, var(--interactive-accent) 28%, transparent) calc(50% + 1px),
+      transparent calc(50% + 1px)
+    );
+  border-radius: 999px;
+}
+
+.tm-lp-col-overlay .tm-lp-col-handle:hover,
+.tm-lp-col-overlay.is-dragging .tm-lp-col-handle {
+  background:
+    linear-gradient(
+      to right,
+      transparent calc(50% - 2px),
+      color-mix(in srgb, var(--interactive-accent) 55%, transparent) calc(50% - 2px),
+      color-mix(in srgb, var(--interactive-accent) 55%, transparent) calc(50% + 2px),
+      transparent calc(50% + 2px)
+    );
+}
+
+.tm-lp-col-overlay .tm-lp-col-guide {
+  position: fixed;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--interactive-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 30%, transparent);
+  pointer-events: none;
+}
+
+.tm-lp-col-overlay .tm-lp-col-guide.is-hidden {
+  display: none;
+}
+
 .tm-floating-toolbar .tm-group {
   display: flex;
   align-items: center;
@@ -196,11 +263,14 @@ table th.tm-merge-placeholder {
 
 table.tm-grid {
   border-collapse: collapse;
-  /* `table-layout: auto` lets the browser size columns to their content.
-   * `width: 100%` fills the wrapper; wider tables cause `.tm-grid-wrap`
-   * to scroll horizontally. */
-  table-layout: auto;
-  width: 100%;
+  /* Stage 4 adds an explicit <colgroup> with per-column widths inside the grid
+   * editor so the drag handles line up with the visual columns. Switch layout
+   * to `fixed` so the browser actually respects those pixel widths instead of
+   * fighting them with `auto` content sizing. Wider tables still cause the
+   * outer `.tm-grid-wrap` to scroll horizontally as before. */
+  table-layout: fixed;
+  width: auto;
+  min-width: 100%;
 }
 
 table.tm-grid th,
@@ -233,6 +303,44 @@ table.tm-grid .tm-cell-edit {
   word-break: break-word;
 }
 
+/* ===== Grid editor: column width resize handles (stage 4) =====
+ * Handles live as thin strips (4–6 px, theme friendly) that hug the right
+ * edge of each header cell except the last column's. We position them
+ * absolutely on top of the cell's own right border so the drag surface
+ * sits exactly on the column division users expect. Cursor and hover are
+ * deliberately obvious so discoverability matches other spreadsheet UI. */
+table.tm-grid .tm-col-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  z-index: 3;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  /* Invisible by default; we paint only a central 2 px highlight on hover
+   * so the strip doesn't visually obscure the header text. */
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+table.tm-grid .tm-col-resizer:hover,
+table.tm-grid.tm-col-resizing .tm-col-resizer:hover {
+  background: var(--interactive-accent);
+  /* Fade the full strip in, but keep it slim enough to not eat into the
+   * cell padding visibly. */
+  background-clip: content-box;
+  padding: 0 2px;
+  background-origin: content-box;
+}
+/* When a drag is in progress switch the whole table's cursor. This prevents
+ * the cursor from flickering between text / pointer / resize as the pointer
+ * leaves the handle and travels over body cells. */
+table.tm-grid.tm-col-resizing,
+table.tm-grid.tm-col-resizing * {
+  cursor: col-resize !important;
+}
+
 .tm-grid-actions {
   display: flex;
   justify-content: flex-end;
@@ -251,6 +359,30 @@ table.tm-grid .tm-cell-edit {
 table.tm-rendered {
   border-collapse: collapse;
   margin: 0.5em 0;
+  /* Stage-4 sample B fix: honour the pixel widths we stored in tm-colwidths
+   * exactly. The post-processor emits a <colgroup> with explicit `width: Npx`
+   * per column, but under the default `table-layout: auto` the browser treats
+   * those as soft hints and lets cell content / theme `width: 100%` win, so
+   * the ratio 80:160:260:380 was not visually noticeable.
+   *   `table-layout: fixed` makes each column exactly `<col>` wide.
+   *   `width: auto`         lets the table shrink/grow to the pixel sum of
+   *                          the colgroup rather than being stretched to the
+   *                          preview pane width; matches stage-1 semantics.
+   *   `max-width: 100%`     keeps very wide tables from overflowing the
+   *                          pane layout – combined with the wrapper rules
+   *                          below, wide tables scroll horizontally instead
+   *                          of forcing a horizontal scrollbar on the whole
+   *                          note.
+   * We deliberately do NOT scope this to `has-colgroup` because (a) colgroup
+   * is always emitted by applyModelToTable when the model has widths, and
+   * (b) even for width-less historical tables, `fixed + width: auto` behaves
+   * substantially the same as auto-layout (the browser auto-sizes each col
+   * on the first pass before locking the layout, so content-heavy tables
+   * still look like the original Obsidian rendering).
+   */
+  table-layout: fixed;
+  width: auto;
+  max-width: 100%;
 }
 
 table.tm-rendered caption {
@@ -267,6 +399,17 @@ table.tm-rendered td {
   border: 1px solid var(--background-modifier-border);
   vertical-align: top;
   line-height: var(--line-height-normal, 1.5);
+  /* Safety net for the `table-layout: fixed` policy chosen above. Without
+   * these, long unbreakable tokens (URLs, hex hashes, CJK without spaces)
+   * would still visually overflow a narrow column even though the col width
+   * is fixed, breaking the 80 / 160 pixel guarantees we try to uphold and
+   * letting content bleed into the next column or past the table frame.
+   * `overflow-wrap: anywhere` has the broadest support for splitting at any
+   * grapheme boundary and is explicitly allowed to split between characters
+   * that would otherwise be considered inseparable (e.g. Chinese). We keep a
+   * traditional `word-break` fallback for older Safari versions too. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 table.tm-rendered th {

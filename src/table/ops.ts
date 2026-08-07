@@ -12,6 +12,7 @@ import {
   makeMergeLeft,
   makeMergeUp,
   recomputeSpans,
+  DEFAULT_COL_WIDTH,
 } from "./model";
 
 /** Replace a row's cells with anchors; used when inserting blank rows. */
@@ -139,6 +140,11 @@ export function insertCol(model: TableModel, col: number, position: "left" | "ri
   }
   m.cols += 1;
   m.aligns.splice(insertAt, 0, "none");
+  // 只有当原模型已经显式设置过 colWidths 时才同步插入默认宽度，
+  // 否则保持 undefined，避免让“从未拖动过”的表也生成宽度数组。
+  if (m.colWidths) {
+    m.colWidths.splice(insertAt, 0, DEFAULT_COL_WIDTH);
+  }
   recomputeSpans(m);
   return m;
 }
@@ -164,6 +170,11 @@ export function deleteCol(model: TableModel, col: number): TableModel {
   for (const row of m.rows) row.splice(col, 1);
   m.cols -= 1;
   m.aligns.splice(col, 1);
+  // 同步删除对应的列宽项；若删完后数组为空，则整体丢弃，保持“undefined = 未显式设置”的语义。
+  if (m.colWidths) {
+    m.colWidths.splice(col, 1);
+    if (m.colWidths.length === 0) m.colWidths = undefined;
+  }
   recomputeSpans(m);
   if (m.cols < 1) return emptyModel(m.rows.length, 1);
   return m;
@@ -202,6 +213,12 @@ export function moveCol(model: TableModel, col: number, dir: "left" | "right"): 
   const a = m.aligns[col];
   m.aligns[col] = m.aligns[target];
   m.aligns[target] = a;
+  // 同步交换宽度，保证移列后“宽度跟着列走”；如果原模型没有显式列宽，则保持 undefined。
+  if (m.colWidths) {
+    const w = m.colWidths[col];
+    m.colWidths[col] = m.colWidths[target];
+    m.colWidths[target] = w;
+  }
   recomputeSpans(m);
   return m;
 }
