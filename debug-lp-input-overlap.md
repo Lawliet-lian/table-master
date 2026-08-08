@@ -72,6 +72,36 @@
 ## Handoff Hint
 - 如果本轮冻结策略仍不能彻底消除跳行，下一位接手者应优先考虑更激进的方案：当 `table.table-editor` 激活时，彻底暂停 LP merge 后处理，甚至只在失焦后或整块表格退出编辑态后再重新应用 merge。
 
+## Chosen Direction
+- 用户最终确认采用“方案 A”：
+  - **编辑态**：主动退回普通 MD 表格，直接显示 `<` / `^^` / `||` 等源码标记；
+  - **非编辑态**：继续恢复真实合并渲染。
+- 当前实现方式：
+  - 在 `pointerdown` 时提前记录用户即将编辑的可见 LP 表格；
+  - 编辑态命中时，不再只是“跳过 merge 重跑”，而是直接调用 `renderPlainMdTableInPlace()` 清掉 `rowspan` / `colspan` / placeholder；
+  - 一旦文档进入内嵌 `table.table-editor`，继续兜底保持普通 MD 表格，避免编辑时间较长时又回切到真实合并外观。
+  - 后续又发现：即使已经退回普通 MD 表格，如果仍然保留 LP 展示态的固定列宽策略（`table-layout: fixed`、固定总宽、`overflow-wrap: anywhere`、`word-break: break-word`），普通表格编辑时依然可能出现换行挤压/文字重叠。
+  - 因此编辑态的 `renderPlainMdTableInPlace()` 现已额外清掉这套列宽展示规则，把布局控制权尽量交还给 Obsidian 原生表格编辑器。
+  - 又尝试过“当 `table-editor` 真正接管输入后，把外层 LP 表格整张 `visibility: hidden`”来彻底消除双层文字重叠，但该方案会把实际编辑所依赖的可视表格也一并隐藏，导致进入编辑模式后整张表消失，已确认回退。
+  - 重新启用 `TRAE-debugger` 时发现，当前工具环境里启动的本地 HTTP Debug Server 虽然能监听 `127.0.0.1:7777`，但对 `/health` 和 `/event` 都只返回 `Empty reply`，连最简单的 `python -m http.server` 基准测试也同样异常，因此不能再把“无日志”误判为插件未加载。
+  - 为了继续采证，`reportLpDebug()` 已改为“先本地追加 NDJSON，再 best-effort 发 HTTP”。当前主要证据源改为插件目录下 `.dbg/trae-debug-log-lp-input-overlap.ndjson`，HTTP 只保留为可选通道。
+  - 最新宿主机日志进一步确认：进入编辑态后，视图里真正存在并承接输入的不是“外层 LP 表格 + 另一个独立 editor overlay”，而是 **`TABLE.table-editor` 本身就挂在外层 `cm-embed-block` 链路里**。
+  - 关键证据：
+    - `table editor dom relationship` 显示 `embeddedEditorSummary = activeEditingTableSummary = TABLE.table-editor`
+    - DOM chain 为 `TABLE.table-editor -> DIV.table-wrapper -> DIV.cm-embed-block.cm-table-widget.markdown-rendered -> ...`
+    - 同时 `run table scan` 在 `viewId=1` 里依然能扫到这张 6x6 表，说明插件循环里遍历到的“可见表格”里已经包含宿主原生 `table-editor`
+    - 出问题的那一格在 `sync merged wrapper` 日志中出现了重复文本：`tdText` 被拼成了两遍，说明插件在编辑态又对宿主原生表格做了一次展示层回填
+  - 因此本轮最终修正方向已经收敛为：**原生 `table.table-editor` 必须完全跳过插件的 LP 后处理**，不再对它执行：
+    - `renderPlainMdTableInPlace()`
+    - `applyMergesInPlace()`
+    - 以及任何 wrapper / 列宽 / merge 语义清理逻辑
+  - 当前代码已新增这一层保护，并移除了“只要 `tableEditorActive` 就兜底处理当前视图全部表格”的策略，避免再次误伤宿主编辑表。
+  - 但这会带来一个副作用：输入不重叠了，编辑态里 `^^ / <` 也一起消失。
+  - 因此又追加了一层更窄的修法：对 `table.table-editor` 不做整表回填，也不改当前输入单元格，只按 `TableModel` 把**非 anchor 占位格**里的源码标记（`^^ / <`）补回去。
+  - 这一步的目标是同时满足两点：
+    - 保住当前“不重叠”的输入稳定性；
+    - 恢复编辑态里用户需要看到的合并占位语义。
+
 ## Verification Conclusion
 - 最小修复：当焦点位于某张 LP 表格内部时，暂时跳过这张“活动表”的 merge 重跑；失焦后再统一补应用。
 - 新一轮调查方向：从“单元格样式兼容”转向“LP widget 高度同步 / 重新测量时机”。

@@ -13,6 +13,8 @@
 // stays in a state CM6 considers consistent.
 
 import { EditorView, ViewPlugin, ViewUpdate, PluginValue } from "@codemirror/view";
+import { appendFileSync, mkdirSync } from "fs";
+import { join } from "path";
 import { isSeparatorLine, parseTable } from "../table/parser";
 import { isCaptionLine, isColWidthsLine, isStructuralTableLine } from "../table/structural";
 import { cloneModel, mergeAxisForCell, type TableModel } from "../table/model";
@@ -25,6 +27,7 @@ const LP_MIN_COL_WIDTH = 33;
 const LP_DEBUG_URL = "http://127.0.0.1:7777/event";
 const LP_DEBUG_SESSION = "lp-input-overlap";
 const LP_DEBUG_RUN = "post-fix";
+const LP_DEBUG_FILE = join(__dirname, ".dbg", `trae-debug-log-${LP_DEBUG_SESSION}.ndjson`);
 const VIEW_DEBUG_IDS = new WeakMap<EditorView, number>();
 let nextViewDebugId = 1;
 
@@ -35,18 +38,30 @@ function reportLpDebug(
   msg: string,
   data: Record<string, unknown>,
 ): void {
+  const event = {
+    sessionId: LP_DEBUG_SESSION,
+    runId: LP_DEBUG_RUN,
+    hypothesisId,
+    location,
+    msg: `[DEBUG] ${msg}`,
+    data,
+    ts: Date.now(),
+  };
+
+  try {
+    // 当前调试链路里，HTTP Debug Server 可能因为运行环境的本地回环限制而
+    // 无法稳定收日志。这里先把每条事件落到插件目录下的 `.dbg/*.ndjson`，
+    // 这样即使 HTTP 上报失败，我们仍然能保留完整运行时证据。
+    mkdirSync(join(__dirname, ".dbg"), { recursive: true });
+    appendFileSync(LP_DEBUG_FILE, `${JSON.stringify(event)}\n`, "utf8");
+  } catch {
+    // 本地调试落盘失败时不影响插件主流程，仍继续尝试 HTTP 上报。
+  }
+
   fetch(LP_DEBUG_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      sessionId: LP_DEBUG_SESSION,
-      runId: LP_DEBUG_RUN,
-      hypothesisId,
-      location,
-      msg: `[DEBUG] ${msg}`,
-      data,
-      ts: Date.now(),
-    }),
+    body: JSON.stringify(event),
   }).catch(() => {});
 }
 // #endregion
@@ -73,6 +88,40 @@ function summarizeElement(el: Element | null): string | null {
           .join("")
       : "";
   return `${el.tagName}${id}${className}`;
+}
+
+function summarizeDomChain(el: Element | null, limit = 6): string[] {
+  const chain: string[] = [];
+  let current: Element | null = el;
+  let depth = 0;
+  while (current && depth < limit) {
+    chain.push(summarizeElement(current) ?? current.tagName);
+    current = current.parentElement;
+    depth++;
+  }
+  return chain;
+}
+
+function getElementRectMetrics(el: Element | null): Record<string, number | null> | null {
+  if (!(el instanceof Element)) return null;
+  const rect = el.getBoundingClientRect();
+  return {
+    top: rect.top,
+    bottom: rect.bottom,
+    left: rect.left,
+    right: rect.right,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function elementAtRectCenter(doc: Document, el: Element | null): string | null {
+  if (!(el instanceof Element)) return null;
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  return summarizeElement(doc.elementFromPoint(x, y));
 }
 
 function getViewMetrics(view: EditorView): Record<string, unknown> {
@@ -167,6 +216,7 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
       scrollListener: () => void;
       pointerMoveListener: (e: PointerEvent) => void;
       pointerUpListener: (e: PointerEvent) => void;
+      tablePointerDownListener: (e: PointerEvent) => void;
       beforeInputListener: (e: InputEvent) => void;
       inputListener: (e: InputEvent) => void;
       compositionStartListener: (e: CompositionEvent) => void;
@@ -195,6 +245,11 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
         };
         this.pointerMoveListener = (e) => this.handlePointerMove(e);
         this.pointerUpListener = (e) => this.handlePointerUp(e);
+        // 用户决定采用“方案 A”后，编辑态不再维持真实合并 DOM，而是主动退回
+        // 普通 MD 表格。这里在 pointerdown 的最早时机记录目标表格，并立即
+        // 触发一次 schedule，这样切换会发生在真正输入之前，而不是等按键后
+        // 才被动触发。
+        this.tablePointerDownListener = (e) => this.handleTablePointerDown(e);
         // #region debug-point A:input-events
         this.beforeInputListener = (e) => this.handleDebugInputEvent("beforeinput", e);
         this.inputListener = (e) => this.handleDebugInputEvent("input", e);
@@ -206,6 +261,7 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
         view.scrollDOM.addEventListener("scroll", this.scrollListener, { passive: true });
         const win = doc.defaultView ?? activeWindow;
         win.addEventListener("scroll", this.scrollListener, { passive: true, capture: true });
+        view.dom.addEventListener("pointerdown", this.tablePointerDownListener, true);
         // #region debug-point A:input-events-register
         view.dom.addEventListener("beforeinput", this.beforeInputListener, true);
         view.dom.addEventListener("input", this.inputListener, true);
@@ -285,6 +341,7 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
         doc.removeEventListener("mousemove", this.mouseMoveListener);
         this.view.scrollDOM.removeEventListener("scroll", this.scrollListener);
         win.removeEventListener("scroll", this.scrollListener, true);
+        this.view.dom.removeEventListener("pointerdown", this.tablePointerDownListener, true);
         doc.removeEventListener("pointermove", this.pointerMoveListener);
         doc.removeEventListener("pointerup", this.pointerUpListener);
         // #region debug-point A:input-events-cleanup
@@ -320,14 +377,13 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
       private run() {
         const doc = this.view.dom.ownerDocument;
         const tableEditorActive = isEmbeddedTableEditorActive(doc);
+        const trackedEditingTable =
+          this.interactingTable?.isConnected && Date.now() < this.interactingTableUntil
+            ? this.interactingTable
+            : null;
         const preserveEditingFlow =
           this.view.hasFocus && Date.now() - this.lastDocChangeAt < 180;
-        const activeEditingTable =
-          this.view.hasFocus && this.interactingTable?.isConnected && Date.now() < this.interactingTableUntil
-            ? this.interactingTable
-            : this.view.hasFocus
-              ? findActiveEditingTable(doc)
-              : null;
+        const activeEditingTable = trackedEditingTable ?? findActiveEditingTable(doc);
         // #region debug-point B:run
         reportLpDebug("B", "src/render/livePreview.ts:run", "run apply merges pass", {
           hasFocus: this.view.hasFocus,
@@ -341,13 +397,37 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
           ...getViewMetrics(this.view),
         });
         // #endregion
-        // 当内嵌表格编辑器接管输入时，暂停所有 LP merge DOM 变更。此时
-        // 可见表格 widget 和实际承接键盘输入的临时 EditorView 并不是同
-        // 一个 DOM 子树；继续重跑外层 widget 会直接打断输入期布局。
-        if (tableEditorActive) {
-          this.hideOverlay();
-          return;
+        // #region debug-point E:table-editor-dom
+        if (tableEditorActive || trackedEditingTable || activeEditingTable) {
+          const embeddedEditorTable = findEmbeddedTableEditor(doc);
+          reportLpDebug("E", "src/render/livePreview.ts:run", "table editor dom relationship", {
+            tableEditorActive,
+            embeddedEditorSummary: summarizeElement(embeddedEditorTable),
+            embeddedEditorRect: getElementRectMetrics(embeddedEditorTable),
+            embeddedEditorChain: summarizeDomChain(embeddedEditorTable),
+            activeEditingTableSummary: summarizeElement(activeEditingTable),
+            activeEditingTableRect: getElementRectMetrics(activeEditingTable),
+            activeEditingTableChain: summarizeDomChain(activeEditingTable),
+            trackedEditingTableSummary: summarizeElement(trackedEditingTable),
+            trackedEditingTableRect: getElementRectMetrics(trackedEditingTable),
+            trackedEditingTableChain: summarizeDomChain(trackedEditingTable),
+            activeIsEmbeddedEditor: !!embeddedEditorTable && activeEditingTable === embeddedEditorTable,
+            trackedIsEmbeddedEditor: !!embeddedEditorTable && trackedEditingTable === embeddedEditorTable,
+            embeddedInsideTracked:
+              !!embeddedEditorTable && !!trackedEditingTable && trackedEditingTable.contains(embeddedEditorTable),
+            trackedInsideEmbedded:
+              !!embeddedEditorTable && !!trackedEditingTable && embeddedEditorTable.contains(trackedEditingTable),
+            embeddedInsideActive:
+              !!embeddedEditorTable && !!activeEditingTable && activeEditingTable.contains(embeddedEditorTable),
+            activeInsideEmbedded:
+              !!embeddedEditorTable && !!activeEditingTable && embeddedEditorTable.contains(activeEditingTable),
+            hitAtEmbeddedCenter: elementAtRectCenter(doc, embeddedEditorTable),
+            hitAtTrackedCenter: elementAtRectCenter(doc, trackedEditingTable),
+            hitAtActiveCenter: elementAtRectCenter(doc, activeEditingTable),
+            ...getViewMetrics(this.view),
+          });
         }
+        // #endregion
         const tables = Array.from(this.view.dom.querySelectorAll<HTMLTableElement>("table"));
         // #region debug-point E:run-tables
         reportLpDebug("E", "src/render/livePreview.ts:run", "run table scan", {
@@ -381,21 +461,46 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
           if (!source) continue;
           try {
             const { model } = parseTable(source.text);
-            const skipActiveEditingTable =
-              !!activeEditingTable &&
-              table === activeEditingTable &&
-              this.view.hasFocus;
+            const renderPlainEditingTable = shouldRenderPlainEditingTable(
+              table,
+              activeEditingTable,
+              trackedEditingTable,
+              tableEditorActive,
+              this.view.hasFocus,
+            );
+            if (table.classList.contains("table-editor")) {
+              // `table-editor` 是宿主真正承接输入的原生表格，因此要按焦点态
+              // 分两套表现：
+              // - 编辑中：只做最小 marker 同步，保留 `<` / `^^` 可见，但不
+              //   改写当前输入层，避免再出现文字重叠；
+              // - 失焦后：恢复真实合并渲染，让 LP 回到最终展示态。
+              if (renderPlainEditingTable) {
+                syncTableEditorMergeMarkersInPlace(table, model);
+              } else {
+                applyMergesInPlace(table, model, false);
+              }
+              this.bindings.set(table, { source, model });
+              continue;
+            }
             // #region debug-point D:active-table-freeze
-            if (skipActiveEditingTable) {
-              reportLpDebug("D", "src/render/livePreview.ts:run", "skip active editing table merge pass", {
+            if (renderPlainEditingTable) {
+              reportLpDebug("D", "src/render/livePreview.ts:run", "render plain editing table", {
                 ...getTableMetrics(table),
                 modelCols: model.cols,
                 hasMerges: modelHasMerges(model),
+                tableEditorActive,
+                trackedEditingTableConnected: !!trackedEditingTable?.isConnected,
                 ...getViewMetrics(this.view),
               });
             }
             // #endregion
-            if (!skipActiveEditingTable) {
+            if (renderPlainEditingTable) {
+              // 方案 A：当前表格处于编辑态时，LP 不再维持 rowspan/colspan
+              // 的“真实合并”外观，而是主动清回普通 MD 表格，让 `<`、`^^`
+              // 等源码标记直接显示出来。这样外层可见表格就不会再和
+              // Obsidian 的内嵌表格编辑器争夺布局控制权。
+              renderPlainMdTableInPlace(table);
+            } else {
               applyMergesInPlace(table, model, preserveEditingFlow);
             }
             this.bindings.set(table, { source, model });
@@ -632,6 +737,29 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
           ...getViewMetrics(this.view),
         });
       }
+
+      private handleTablePointerDown(e: PointerEvent) {
+        const target = e.target as Node | null;
+        if (!(target instanceof Node)) return;
+        const table =
+          target instanceof Element
+            ? target.closest("table")
+            : target.parentElement?.closest("table");
+        if (!(table instanceof HTMLTableElement) || !this.view.dom.contains(table)) {
+          // 点击表格外部时，尽快结束“编辑态普通表格”窗口，让失焦后的下一轮
+          // run 能把可见表格恢复成真实合并外观。
+          this.interactingTable = null;
+          this.interactingTableUntil = 0;
+          this.schedule();
+          return;
+        }
+        // 记录用户即将编辑的可见 LP 表格。哪怕随后 Obsidian 切到那个
+        // 21px 的内嵌 `table-editor`，我们仍然能知道应该把哪张可见表格
+        // 退回为普通 MD 表格。
+        this.interactingTable = table;
+        this.interactingTableUntil = Date.now() + 4000;
+        this.schedule();
+      }
       // #endregion
     },
   );
@@ -659,6 +787,39 @@ function isEmbeddedTableEditorActive(doc: Document): boolean {
   const anchor = doc.getSelection()?.anchorNode ?? null;
   const anchorParent = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
   return !!anchorParent?.closest("table.table-editor");
+}
+
+function findEmbeddedTableEditor(doc: Document): HTMLTableElement | null {
+  const active = doc.activeElement;
+  if (active instanceof Element) {
+    const fromActive = active.closest("table.table-editor");
+    if (fromActive instanceof HTMLTableElement) return fromActive;
+  }
+  const anchor = doc.getSelection()?.anchorNode ?? null;
+  const anchorParent = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
+  const fromSelection = anchorParent?.closest("table.table-editor");
+  if (fromSelection instanceof HTMLTableElement) return fromSelection;
+  return doc.querySelector("table.table-editor");
+}
+
+function shouldRenderPlainEditingTable(
+  table: HTMLTableElement,
+  activeEditingTable: HTMLTableElement | null,
+  trackedEditingTable: HTMLTableElement | null,
+  tableEditorActive: boolean,
+  viewHasFocus: boolean,
+): boolean {
+  // 这里的目标不是“只要进入过编辑态，就一直保持源码表格”，而是明确区分：
+  // - 正在编辑 / 仍持有焦点：显示源码占位效果（`<` / `^^`）
+  // - 鼠标失焦 / 退出编辑：恢复真实合并渲染
+  //
+  // 因此 tracked/active 只能在“仍处于编辑窗口期”时生效；一旦视图失焦，
+  // 就必须回到 merge 渲染，不能再让编辑态残留。
+  const editingWindowOpen = tableEditorActive || viewHasFocus;
+  if (!editingWindowOpen) return false;
+  if (trackedEditingTable && table === trackedEditingTable) return true;
+  if (activeEditingTable && table === activeEditingTable) return true;
+  return false;
 }
 
 function getRenderedWidths(table: HTMLTableElement, model: TableModel): number[] {
@@ -796,6 +957,98 @@ function modelHasMerges(model: TableModel): boolean {
   return false;
 }
 
+function clearRenderedMergePresentation(table: HTMLTableElement): void {
+  // 编辑态普通表格需要把我们所有“真实合并外观”都撤掉，包括：
+  // - rowspan / colspan
+  // - placeholder 隐藏类
+  // - merge 语义 data 属性
+  // - 纵向居中的内联样式
+  // - wrapper 的展示态高度修正
+  //
+  // 这里按全表遍历，而不是只扫 `[data-tm-merge]`，是因为上一轮渲染可能
+  // 已经留下原生表格属性；全量清理更直接，也更接近“回到普通 MD 表格”的
+  // 最终目标。
+  for (const td of Array.from(table.querySelectorAll<HTMLTableCellElement>("td, th"))) {
+    td.removeAttribute("colspan");
+    td.removeAttribute("rowspan");
+    td.classList.remove("tm-merge-placeholder");
+    delete td.dataset.tmMerge;
+    delete td.dataset.tmMergeAxis;
+    td.style.removeProperty("vertical-align");
+    syncLpMergedCellWrapperAlignment(td, "", false);
+  }
+}
+
+function clearLpColWidthPresentation(table: HTMLTableElement): void {
+  // 编辑态普通表格不再保留 LP 展示态的固定列宽策略。否则：
+  // - `table-layout: fixed`
+  // - 表格总宽强绑到列宽之和
+  // - `overflow-wrap: anywhere` / `word-break: break-word`
+  //
+  // 会继续影响 Obsidian 内嵌表格编辑器的文本布局，哪怕我们已经把
+  // `<` / `^^` 渲染回普通表格，也仍然可能出现输入换行挤压或文字重叠。
+  table.querySelector<HTMLTableColElement>("colgroup[data-tm-colgroup='1']")?.remove();
+  table.style.removeProperty("table-layout");
+  table.style.removeProperty("width");
+  table.style.removeProperty("min-width");
+  table.style.removeProperty("max-width");
+  for (const cell of Array.from(table.querySelectorAll<HTMLTableCellElement>("th, td"))) {
+    cell.style.removeProperty("overflow-wrap");
+    cell.style.removeProperty("word-break");
+  }
+}
+
+function renderPlainMdTableInPlace(table: HTMLTableElement): void {
+  // 方案 A 下，编辑态优先追求“像 Obsidian 原生普通表格那样稳定可编辑”，
+  // 不再保留 LP 展示态的固定列宽/强制换行策略。这样 `<` / `^^` / `||`
+  // 等源码标记会直接显示出来，同时把布局控制权交还给表格编辑器本身。
+  clearLpColWidthPresentation(table);
+  clearRenderedMergePresentation(table);
+}
+
+function syncTableEditorCellText(td: HTMLTableCellElement, text: string): void {
+  const wrapper = td.firstElementChild;
+  if (wrapper instanceof HTMLElement && wrapper.classList.contains("table-cell-wrapper")) {
+    // 这里明确只给占位格回填一个纯文本标记，不插 HTML，不改当前活动输入层，
+    // 以尽量降低对宿主原生 table-editor 的干扰。
+    wrapper.textContent = text;
+    return;
+  }
+  td.textContent = text;
+}
+
+function syncTableEditorMergeMarkersInPlace(table: HTMLTableElement, model: TableModel): void {
+  // `table.table-editor` 已经是宿主维护的“普通矩形表格”，我们不再把它改造成
+  // 真实 merge DOM。这里只做最小同步：
+  // - 清掉插件可能残留的 merge 展示属性
+  // - 只把非 anchor 占位格的源码标记（`<` / `^^`）补回去
+  //
+  // 这样既能维持当前“不重叠”的输入稳定性，也能把用户需要看到的占位语义
+  // 重新显示出来。
+  clearLpColWidthPresentation(table);
+  const rows = Array.from(table.rows);
+  const rowLimit = Math.min(rows.length, model.rows.length);
+  for (let r = 0; r < rowLimit; r++) {
+    const tr = rows[r];
+    const cells = Array.from(tr.cells);
+    const colLimit = Math.min(cells.length, model.cols);
+    for (let c = 0; c < colLimit; c++) {
+      const td = cells[c];
+      const modelCell = model.rows[r][c];
+      if (!td || !modelCell) continue;
+      td.removeAttribute("colspan");
+      td.removeAttribute("rowspan");
+      td.classList.remove("tm-merge-placeholder");
+      delete td.dataset.tmMerge;
+      delete td.dataset.tmMergeAxis;
+      td.style.removeProperty("vertical-align");
+      if (!modelCell.isAnchor) {
+        syncTableEditorCellText(td, modelCell.raw);
+      }
+    }
+  }
+}
+
 function applyMergesInPlace(
   table: HTMLTableElement,
   model: TableModel,
@@ -813,19 +1066,9 @@ function applyMergesInPlace(
   // #endregion
   applyColWidthsInPlace(table, model);
   if (!modelHasMerges(model)) {
-    // No merges — clean up any stale merge attributes from a previous pass
-    // (e.g. the source was re-matched after an edit that removed merges).
-    for (const td of Array.from(table.querySelectorAll<HTMLTableCellElement>("[data-tm-merge]"))) {
-      td.removeAttribute("colspan");
-      td.removeAttribute("rowspan");
-      td.classList.remove("tm-merge-placeholder");
-      delete td.dataset.tmMerge;
-      delete td.dataset.tmMergeAxis;
-      // LP 可能会被主题 / Obsidian 自带的表格样式覆盖，所以这里把我们之前
-      // 为 merged anchor 写入的内联垂直对齐一并清掉，避免表格解除合并后还残留。
-      td.style.removeProperty("vertical-align");
-      syncLpMergedCellWrapperAlignment(td, "", preserveEditingFlow);
-    }
+    // 没有合并结构时，统一走全表清理逻辑，保证所有残留 merge 外观都能
+    // 被撤干净。这样也让“普通表格”和“编辑态方案 A”的回退路径保持一致。
+    clearRenderedMergePresentation(table);
     // #region debug-point E:apply-merges-after-clean
     reportLpDebug("E", "src/render/livePreview.ts:applyMergesInPlace", "apply merges cleanup completed", {
       preserveEditingFlow,
@@ -981,14 +1224,7 @@ function applyColWidthsInPlace(table: HTMLTableElement, model: TableModel): void
   const hasWidths = Array.isArray(model.colWidths) && model.colWidths.length === model.cols;
   if (!hasWidths) {
     existing?.remove();
-    table.style.removeProperty("table-layout");
-    table.style.removeProperty("width");
-    table.style.removeProperty("min-width");
-    table.style.removeProperty("max-width");
-    for (const cell of Array.from(table.querySelectorAll<HTMLTableCellElement>("th, td"))) {
-      cell.style.removeProperty("overflow-wrap");
-      cell.style.removeProperty("word-break");
-    }
+    clearLpColWidthPresentation(table);
     return;
   }
 
