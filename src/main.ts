@@ -50,6 +50,7 @@ function readSettings(data: unknown): Partial<TableMasterSettings> {
 
 export default class TableMasterPlugin extends Plugin {
   settings: TableMasterSettings = DEFAULT_SETTINGS;
+  private previewRerenderTimer: number | null = null;
 
   onload(): void {
     // Obsidian's `Plugin.onload` signature is declared as `void` even though
@@ -145,8 +146,19 @@ export default class TableMasterPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
         this.broadcastSettingsChanged();
+          this.schedulePreviewRerender();
       }),
     );
+
+      // 切换 source <-> preview、拖动分栏、折叠侧边栏等动作并不一定会让
+      // reading view 重新跑 markdown post-processor。我们的阅读模式表格布局
+      // 又依赖当前容器宽度与布局算法版本，因此这里在 layout-change 后主动
+      // 触发一次 preview rerender，避免用户只能靠重启 Obsidian 才看到新布局。
+      this.registerEvent(
+        this.app.workspace.on("layout-change", () => {
+          this.schedulePreviewRerender();
+        }),
+      );
 
     // Commands
     this.registerCommands();
@@ -159,6 +171,10 @@ export default class TableMasterPlugin extends Plugin {
   }
 
   onunload(): void {
+      if (this.previewRerenderTimer != null) {
+        window.clearTimeout(this.previewRerenderTimer);
+        this.previewRerenderTimer = null;
+      }
     // Final safety sweep: Obsidian doesn't always reconfigure already-open
     // CodeMirror views when a plugin unloads, so any floating toolbars that
     // were attached to a markdown view's wrapper may otherwise leak. Remove
@@ -333,6 +349,29 @@ export default class TableMasterPlugin extends Plugin {
       }),
     );
   }
+
+    private schedulePreviewRerender(): void {
+      if (this.previewRerenderTimer != null) return;
+      this.previewRerenderTimer = window.setTimeout(() => {
+        this.previewRerenderTimer = null;
+        this.rerenderMarkdownPreviews();
+      }, 50);
+    }
+
+    private rerenderMarkdownPreviews(): void {
+      const seen = new Set<MarkdownView>();
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        const view = leaf.view;
+        if (!(view instanceof MarkdownView) || seen.has(view)) return;
+        seen.add(view);
+        if (view.getMode() !== "preview") return;
+        try {
+          view.previewMode.rerender(true);
+        } catch {
+          // 某些 Obsidian 版本/状态下 preview 可能暂时未就绪；忽略即可。
+        }
+      });
+    }
 
   /**
    * Public hook used by the floating toolbar and right-click menu.

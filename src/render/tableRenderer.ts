@@ -6,6 +6,11 @@ import type { App, Component, MarkdownRenderer as MdRenderer } from "obsidian";
 import { MarkdownRenderer } from "obsidian";
 import { MIN_COL_WIDTH, TableModel } from "../table/model";
 
+// 阅读模式布局算法版本。只要阅读模式的宽度归一化 / 再分配策略发生变化，
+// 升这个版本就能让已有 DOM 在下次 post-processor 运行时重新渲染，
+// 而不会被旧的 `data-tm-rendered` 签名错误复用。
+const READING_LAYOUT_VERSION = "reading-v2";
+
 export interface ApplyOptions {
   sourcePath: string;
   component: Component;
@@ -25,7 +30,8 @@ export async function applyModelToTable(
   model: TableModel,
   opts: ApplyOptions,
 ): Promise<void> {
-  if (table.dataset.tmRendered === modelSignature(model)) return;
+  const renderSignature = modelSignature(model, table);
+  if (table.dataset.tmRendered === renderSignature) return;
 
   // Snapshot styles so we can re-apply them once we replace the body.
   const className = table.className;
@@ -88,7 +94,7 @@ export async function applyModelToTable(
   // renderers don't fight with us removing/reordering nodes.
   if (opts.renderInline) await renderCellsInline(table, model, opts);
 
-  table.dataset.tmRendered = modelSignature(model);
+  table.dataset.tmRendered = renderSignature;
 }
 
 /**
@@ -387,7 +393,7 @@ function unwrapTrailingParagraph(td: HTMLElement): void {
 }
 
 /** Lightweight hash so repeated post-processor invocations do nothing. */
-function modelSignature(model: TableModel): string {
+function modelSignature(model: TableModel, table: HTMLTableElement): string {
   const parts: string[] = [
     String(model.headerRows),
     String(model.cols),
@@ -397,6 +403,7 @@ function modelSignature(model: TableModel): string {
     // still considered a new signature; otherwise the post-processor would
     // early-exit and the new <colgroup> would never be painted.
     JSON.stringify(model.colWidths ?? []),
+    readingEnvironmentSignature(table),
   ];
   for (const row of model.rows) {
     const cells = row.map((cell) =>
@@ -407,4 +414,19 @@ function modelSignature(model: TableModel): string {
     parts.push(cells.join("|"));
   }
   return parts.join("\n");
+}
+
+/**
+ * 把“阅读模式环境”折叠进签名里，避免出现下面这种情况：
+ * - markdown 源码没变；
+ * - 但用户从 LP 切到阅读模式、调整了 pane 宽度，或我们升级了阅读模式布局算法；
+ * - 旧的 `data-tm-rendered` 仍然命中，导致 reading view 直接跳过重渲染。
+ *
+ * 这里不记录精确像素宽度，而是用分桶值降低抖动：只有阅读区宽度跨过一个桶时，
+ * 才认为布局环境发生了足够大的变化，值得重新渲染。
+ */
+function readingEnvironmentSignature(table: HTMLTableElement): string {
+  const available = getReadingAvailableWidth(table);
+  const widthBucket = Math.max(0, Math.round(available / 32));
+  return `${READING_LAYOUT_VERSION}|w${widthBucket}`;
 }
