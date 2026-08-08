@@ -242,7 +242,7 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
           model: cloneModel(model),
           widths: widths.slice(),
           startWidths: widths.slice(),
-          minWidths: getMinimumReadableWidths(table, model),
+          minWidths: new Array<number>(model.cols).fill(MIN_COL_WIDTH),
           col,
           startX: e.clientX,
         };
@@ -369,62 +369,6 @@ function getColumnRightEdges(table: HTMLTableElement, model: TableModel, widths:
   }
 
   return edges.map((edge, idx) => (edge > 0 ? edge : fallback[idx]));
-}
-
-/**
- * 估算每一列在当前主题/字体下“还能继续缩到哪”为止。
- *
- * 这里不尝试做像素级的排版引擎模拟，而是采用对用户更友好的近似：
- * - 读取当前表格里每个单元格的文本内容；
- * - 用该单元格自己的计算样式（字体、字重、字号）测量单行文本宽度；
- * - 加回左右 padding 与边框；
- * - 多列合并单元格按 colspan 均摊到各逻辑列。
- *
- * 最终每列下限 = max(MIN_COL_WIDTH, 该列所有可见单元格估算宽度的最大值)。
- * 这样拖到最小时，会更接近“文字刚好还能完整显示”的直觉，而不只是固定 80px。
- */
-function getMinimumReadableWidths(table: HTMLTableElement, model: TableModel): number[] {
-  const out = new Array<number>(model.cols).fill(MIN_COL_WIDTH);
-  const doc = table.ownerDocument;
-  const canvas = doc.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return out;
-
-  for (const row of Array.from(table.rows)) {
-    let logicalCol = 0;
-    for (const cell of Array.from(row.cells)) {
-      const span = Math.max(1, cell.colSpan || 1);
-      const style = doc.defaultView?.getComputedStyle(cell);
-      if (!style) {
-        logicalCol += span;
-        continue;
-      }
-      ctx.font = style.font || [
-        style.fontStyle,
-        style.fontVariant,
-        style.fontWeight,
-        style.fontSize,
-        "/",
-        style.lineHeight,
-        style.fontFamily,
-      ].join(" ");
-
-      const text = (cell.textContent ?? "").replace(/\s+/g, " ").trim();
-      const textWidth = text ? ctx.measureText(text).width : 0;
-      const padding =
-        parseFloat(style.paddingLeft || "0") +
-        parseFloat(style.paddingRight || "0") +
-        parseFloat(style.borderLeftWidth || "0") +
-        parseFloat(style.borderRightWidth || "0");
-      const estimated = Math.max(MIN_COL_WIDTH, Math.ceil((textWidth + padding + 12) / span));
-      for (let i = 0; i < span && logicalCol + i < model.cols; i++) {
-        out[logicalCol + i] = Math.max(out[logicalCol + i], estimated);
-      }
-      logicalCol += span;
-      if (logicalCol >= model.cols) break;
-    }
-  }
-  return out;
 }
 
 function sameWidths(a: number[], b: number[]): boolean {
@@ -563,6 +507,7 @@ function applyColWidthsInPlace(table: HTMLTableElement, model: TableModel): void
     existing?.remove();
     table.style.removeProperty("table-layout");
     table.style.removeProperty("width");
+    table.style.removeProperty("min-width");
     table.style.removeProperty("max-width");
     for (const cell of Array.from(table.querySelectorAll<HTMLTableCellElement>("th, td"))) {
       cell.style.removeProperty("overflow-wrap");
@@ -586,22 +531,29 @@ function applyColWidthsInPlace(table: HTMLTableElement, model: TableModel): void
   }
 
   const cols = Array.from(colgroup.children) as HTMLTableColElement[];
+  let totalWidth = 0;
   for (let c = 0; c < model.cols; c++) {
     const width = model.colWidths?.[c];
     if (width != null && Number.isFinite(width) && Number.isInteger(width)) {
       cols[c].style.width = `${width}px`;
+      totalWidth += width;
     } else {
       cols[c].style.removeProperty("width");
     }
   }
 
-  // Mirror reading-view semantics: fixed layout + auto width means the table
-  // width follows the sum of persisted pixels instead of stretching to the
-  // editor pane width. We keep this inline in LP so we don't need to rely on
-  // theme-specific selectors or a broader CSS class toggle.
+  // In CodeMirror's Live Preview widget, `table-layout: fixed` combined with
+  // `width: auto` can still end up visually stretched by the editor/theme,
+  // which makes narrow persisted widths like 20px and 30px look identical.
+  //
+  // Force the widget table's own width to the exact pixel sum of the
+  // persisted columns so each `<col>` width has a real layout box to occupy.
+  // This keeps LP aligned with the stored metadata instead of letting the
+  // editor pane redistribute the extra width.
   table.style.tableLayout = "fixed";
-  table.style.width = "auto";
-  table.style.maxWidth = "100%";
+  table.style.width = `${Math.max(totalWidth, MIN_COL_WIDTH * model.cols)}px`;
+  table.style.minWidth = table.style.width;
+  table.style.maxWidth = "none";
   for (const cell of Array.from(table.querySelectorAll<HTMLTableCellElement>("th, td"))) {
     cell.style.overflowWrap = "anywhere";
     cell.style.wordBreak = "break-word";
