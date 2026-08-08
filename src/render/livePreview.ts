@@ -22,6 +22,114 @@ import { serialize, type OutputFormat } from "../table/serializer";
 // TableModel 的全局 MIN_COL_WIDTH，这样可以保持当前阅读模式“看起来挺好”的
 // 现状，同时把 LP 交互最小宽度固定到用户要求的 33。
 const LP_MIN_COL_WIDTH = 33;
+const LP_DEBUG_URL = "http://127.0.0.1:7777/event";
+const LP_DEBUG_SESSION = "lp-input-overlap";
+const LP_DEBUG_RUN = "post-fix";
+const VIEW_DEBUG_IDS = new WeakMap<EditorView, number>();
+let nextViewDebugId = 1;
+
+// #region debug-point reporter
+function reportLpDebug(
+  hypothesisId: "A" | "B" | "C" | "D" | "E",
+  location: string,
+  msg: string,
+  data: Record<string, unknown>,
+): void {
+  fetch(LP_DEBUG_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: LP_DEBUG_SESSION,
+      runId: LP_DEBUG_RUN,
+      hypothesisId,
+      location,
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
+}
+// #endregion
+
+// #region debug-point E:metrics-helpers
+function getViewDebugId(view: EditorView): number {
+  const existing = VIEW_DEBUG_IDS.get(view);
+  if (existing != null) return existing;
+  const created = nextViewDebugId++;
+  VIEW_DEBUG_IDS.set(view, created);
+  return created;
+}
+
+function summarizeElement(el: Element | null): string | null {
+  if (!el) return null;
+  const id = el.id ? `#${el.id}` : "";
+  const className =
+    el instanceof HTMLElement && typeof el.className === "string"
+      ? el.className
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 3)
+          .map((name) => `.${name}`)
+          .join("")
+      : "";
+  return `${el.tagName}${id}${className}`;
+}
+
+function getViewMetrics(view: EditorView): Record<string, unknown> {
+  const active = view.dom.ownerDocument.activeElement;
+  const domRect = view.dom.getBoundingClientRect();
+  const scrollRect = view.scrollDOM.getBoundingClientRect();
+  const visibleRanges = view.visibleRanges;
+  const lastVisibleRange = visibleRanges.length ? visibleRanges[visibleRanges.length - 1] : null;
+  const win = view.dom.ownerDocument.defaultView ?? activeWindow;
+  const domStyle = win.getComputedStyle(view.dom);
+  const scrollStyle = win.getComputedStyle(view.scrollDOM);
+  return {
+    viewId: getViewDebugId(view),
+    hasFocus: view.hasFocus,
+    domIsConnected: view.dom.isConnected,
+    scrollIsConnected: view.scrollDOM.isConnected,
+    domDisplay: domStyle.display,
+    domVisibility: domStyle.visibility,
+    scrollDisplay: scrollStyle.display,
+    scrollVisibility: scrollStyle.visibility,
+    domClientHeight: view.dom.clientHeight,
+    domScrollHeight: view.dom.scrollHeight,
+    domTop: domRect.top,
+    domBottom: domRect.bottom,
+    domLeft: domRect.left,
+    domRight: domRect.right,
+    scrollClientHeight: view.scrollDOM.clientHeight,
+    scrollScrollHeight: view.scrollDOM.scrollHeight,
+    scrollTopRect: scrollRect.top,
+    scrollBottomRect: scrollRect.bottom,
+    scrollLeftRect: scrollRect.left,
+    scrollRightRect: scrollRect.right,
+    scrollTop: view.scrollDOM.scrollTop,
+    visibleRangeCount: visibleRanges.length,
+    visibleFrom: visibleRanges[0]?.from ?? null,
+    visibleTo: lastVisibleRange?.to ?? null,
+    activeTag: active?.tagName ?? null,
+    activeSummary: active instanceof Element ? summarizeElement(active) : null,
+    activeWithinView: active instanceof Node ? view.dom.contains(active) : false,
+    activeWithinScroll: active instanceof Node ? view.scrollDOM.contains(active) : false,
+  };
+}
+
+function getTableMetrics(table: HTMLTableElement): Record<string, number | null> {
+  const rect = table.getBoundingClientRect();
+  return {
+    rows: table.rows.length,
+    cells: table.querySelectorAll("td, th").length,
+    height: rect.height,
+    top: rect.top,
+    bottom: rect.bottom,
+    offsetHeight: table.offsetHeight,
+    scrollHeight: table.scrollHeight,
+    clientHeight: table.clientHeight,
+  };
+}
+// #endregion
 
 interface LivePreviewHost {
   getOutputFormat(): OutputFormat;
@@ -48,6 +156,8 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
     class implements PluginValue {
       view: EditorView;
       timer: number | null = null;
+      settleTimer: number | null = null;
+      lastDocChangeAt = 0;
       bindings = new WeakMap<HTMLTableElement, TableBinding>();
       hoverTable: HTMLTableElement | null = null;
       overlayEl: HTMLElement;
@@ -57,6 +167,13 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
       scrollListener: () => void;
       pointerMoveListener: (e: PointerEvent) => void;
       pointerUpListener: (e: PointerEvent) => void;
+      beforeInputListener: (e: InputEvent) => void;
+      inputListener: (e: InputEvent) => void;
+      compositionStartListener: (e: CompositionEvent) => void;
+      compositionUpdateListener: (e: CompositionEvent) => void;
+      compositionEndListener: (e: CompositionEvent) => void;
+      interactingTable: HTMLTableElement | null = null;
+      interactingTableUntil = 0;
 
       constructor(view: EditorView) {
         this.view = view;
@@ -68,23 +185,88 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
         this.overlayEl.appendChild(this.guideEl);
         doc.body.appendChild(this.overlayEl);
         this.mouseMoveListener = (e) => this.handleMouseMove(e);
-        this.scrollListener = () => this.refreshOverlay();
+        this.scrollListener = () => {
+          // #region debug-point E:scroll-refresh
+          reportLpDebug("E", "src/render/livePreview.ts:scrollListener", "scroll refresh", {
+            ...getViewMetrics(this.view),
+          });
+          // #endregion
+          this.refreshOverlay();
+        };
         this.pointerMoveListener = (e) => this.handlePointerMove(e);
         this.pointerUpListener = (e) => this.handlePointerUp(e);
+        // #region debug-point A:input-events
+        this.beforeInputListener = (e) => this.handleDebugInputEvent("beforeinput", e);
+        this.inputListener = (e) => this.handleDebugInputEvent("input", e);
+        this.compositionStartListener = (e) => this.handleDebugCompositionEvent("compositionstart", e);
+        this.compositionUpdateListener = (e) => this.handleDebugCompositionEvent("compositionupdate", e);
+        this.compositionEndListener = (e) => this.handleDebugCompositionEvent("compositionend", e);
+        // #endregion
         doc.addEventListener("mousemove", this.mouseMoveListener, { passive: true });
         view.scrollDOM.addEventListener("scroll", this.scrollListener, { passive: true });
         const win = doc.defaultView ?? activeWindow;
         win.addEventListener("scroll", this.scrollListener, { passive: true, capture: true });
+        // #region debug-point A:input-events-register
+        view.dom.addEventListener("beforeinput", this.beforeInputListener, true);
+        view.dom.addEventListener("input", this.inputListener, true);
+        view.dom.addEventListener("compositionstart", this.compositionStartListener, true);
+        view.dom.addEventListener("compositionupdate", this.compositionUpdateListener, true);
+        view.dom.addEventListener("compositionend", this.compositionEndListener, true);
+        // #endregion
+        // 记录 ViewPlugin 生命周期，确认输入态和可见表格是否落在不同的
+        // EditorView 实例上，以及这些实例是否仍然挂在当前文档里。
+        reportLpDebug("E", "src/render/livePreview.ts:constructor", "plugin constructed", {
+          ...getViewMetrics(this.view),
+        });
         this.schedule();
       }
 
       update(u: ViewUpdate) {
-        if (u.docChanged || u.viewportChanged || u.geometryChanged) this.schedule();
+        const doc = this.view.dom.ownerDocument;
+        const tableEditorActive = isEmbeddedTableEditorActive(doc);
+        // #region debug-point E:update
+        if (u.docChanged || u.viewportChanged || u.geometryChanged || u.focusChanged) {
+          reportLpDebug("E", "src/render/livePreview.ts:update", "view update", {
+            docChanged: u.docChanged,
+            viewportChanged: u.viewportChanged,
+            geometryChanged: u.geometryChanged,
+            focusChanged: u.focusChanged,
+            tableEditorActive,
+            hasTrackedInteractingTable:
+              !!this.interactingTable?.isConnected && Date.now() < this.interactingTableUntil,
+            ...getViewMetrics(this.view),
+          });
+        }
+        // #endregion
+        if (u.docChanged) {
+          this.lastDocChangeAt = Date.now();
+          // LP 编辑过程中避免立刻重跑合并布局。运行时证据表明，输入中的
+          // DOM 重写会让整张表的行高/换行瞬时错位，出现文字掉到下一行、
+          // 与下一行内容重叠、只显示半个字等问题。这里改为：
+          // - 编辑中：只做 debounce settle，等用户停顿后再统一刷新
+          // - 非编辑态：维持原先的即时刷新
+          // 额外处理 Obsidian 的内嵌表格编辑器：它会创建一个仅一行高的
+          // 临时 EditorView 来承接输入，而真正可见的 LP 表格仍在外层主
+          // EditorView 中。若此时外层视图继续即时重跑 merge，会在输入中
+          // 改动可见 widget，导致文字掉到第二行、半字、重叠等问题。
+          // 因此只要检测到 `.table-editor` 处于激活态，就暂停即时刷新，
+          // 只保留 settle 阶段的兜底刷新，等输入停顿/失焦后再恢复。
+          if (!u.view.hasFocus && !tableEditorActive) this.schedule();
+          this.scheduleSettle();
+        } else if (u.viewportChanged || u.geometryChanged || u.focusChanged) {
+          this.schedule();
+        }
         if (u.geometryChanged || u.viewportChanged) this.refreshOverlay();
-        if (u.focusChanged && !u.view.hasFocus && !this.drag) this.hideOverlay();
+        if (u.focusChanged && !u.view.hasFocus && !this.drag) {
+          this.hideOverlay();
+          this.schedule();
+        }
       }
 
       destroy() {
+        reportLpDebug("E", "src/render/livePreview.ts:destroy", "plugin destroyed", {
+          ...getViewMetrics(this.view),
+        });
         if (this.timer != null) {
           // Use the editor's own window so the timer is cleared in popout
           // windows too. Bare `window` would only resolve to the main window
@@ -93,6 +275,11 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
           win.clearTimeout(this.timer);
           this.timer = null;
         }
+        if (this.settleTimer != null) {
+          const win = this.view.dom.ownerDocument.defaultView ?? activeWindow;
+          win.clearTimeout(this.settleTimer);
+          this.settleTimer = null;
+        }
         const doc = this.view.dom.ownerDocument;
         const win = doc.defaultView ?? activeWindow;
         doc.removeEventListener("mousemove", this.mouseMoveListener);
@@ -100,6 +287,13 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
         win.removeEventListener("scroll", this.scrollListener, true);
         doc.removeEventListener("pointermove", this.pointerMoveListener);
         doc.removeEventListener("pointerup", this.pointerUpListener);
+        // #region debug-point A:input-events-cleanup
+        this.view.dom.removeEventListener("beforeinput", this.beforeInputListener, true);
+        this.view.dom.removeEventListener("input", this.inputListener, true);
+        this.view.dom.removeEventListener("compositionstart", this.compositionStartListener, true);
+        this.view.dom.removeEventListener("compositionupdate", this.compositionUpdateListener, true);
+        this.view.dom.removeEventListener("compositionend", this.compositionEndListener, true);
+        // #endregion
         this.overlayEl.remove();
       }
 
@@ -112,8 +306,59 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
         }, 50);
       }
 
+      private scheduleSettle() {
+        const win = this.view.dom.ownerDocument.defaultView ?? activeWindow;
+        if (this.settleTimer != null) {
+          win.clearTimeout(this.settleTimer);
+        }
+        this.settleTimer = win.setTimeout(() => {
+          this.settleTimer = null;
+          this.run();
+        }, 320);
+      }
+
       private run() {
+        const doc = this.view.dom.ownerDocument;
+        const tableEditorActive = isEmbeddedTableEditorActive(doc);
+        const preserveEditingFlow =
+          this.view.hasFocus && Date.now() - this.lastDocChangeAt < 180;
+        const activeEditingTable =
+          this.view.hasFocus && this.interactingTable?.isConnected && Date.now() < this.interactingTableUntil
+            ? this.interactingTable
+            : this.view.hasFocus
+              ? findActiveEditingTable(doc)
+              : null;
+        // #region debug-point B:run
+        reportLpDebug("B", "src/render/livePreview.ts:run", "run apply merges pass", {
+          hasFocus: this.view.hasFocus,
+          preserveEditingFlow,
+          tableEditorActive,
+          sinceLastDocChange: Date.now() - this.lastDocChangeAt,
+          hasActiveEditingTable: !!activeEditingTable,
+          activeEditingTableMetrics: activeEditingTable ? getTableMetrics(activeEditingTable) : null,
+          hasTrackedInteractingTable:
+            !!this.interactingTable?.isConnected && Date.now() < this.interactingTableUntil,
+          ...getViewMetrics(this.view),
+        });
+        // #endregion
+        // 当内嵌表格编辑器接管输入时，暂停所有 LP merge DOM 变更。此时
+        // 可见表格 widget 和实际承接键盘输入的临时 EditorView 并不是同
+        // 一个 DOM 子树；继续重跑外层 widget 会直接打断输入期布局。
+        if (tableEditorActive) {
+          this.hideOverlay();
+          return;
+        }
         const tables = Array.from(this.view.dom.querySelectorAll<HTMLTableElement>("table"));
+        // #region debug-point E:run-tables
+        reportLpDebug("E", "src/render/livePreview.ts:run", "run table scan", {
+          tableCount: tables.length,
+          tableSummaries: tables.slice(0, 3).map((table, index) => ({
+            index,
+            ...getTableMetrics(table),
+          })),
+          ...getViewMetrics(this.view),
+        });
+        // #endregion
         if (!tables.length) {
           this.hideOverlay();
           return;
@@ -136,7 +381,23 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
           if (!source) continue;
           try {
             const { model } = parseTable(source.text);
-            applyMergesInPlace(table, model);
+            const skipActiveEditingTable =
+              !!activeEditingTable &&
+              table === activeEditingTable &&
+              this.view.hasFocus;
+            // #region debug-point D:active-table-freeze
+            if (skipActiveEditingTable) {
+              reportLpDebug("D", "src/render/livePreview.ts:run", "skip active editing table merge pass", {
+                ...getTableMetrics(table),
+                modelCols: model.cols,
+                hasMerges: modelHasMerges(model),
+                ...getViewMetrics(this.view),
+              });
+            }
+            // #endregion
+            if (!skipActiveEditingTable) {
+              applyMergesInPlace(table, model, preserveEditingFlow);
+            }
             this.bindings.set(table, { source, model });
           } catch {
             // Skip malformed tables silently.
@@ -310,12 +571,94 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
         this.overlayEl.classList.remove("is-visible");
         this.guideEl.classList.add("is-hidden");
       }
+
+      // #region debug-point A:input-events-methods
+      private handleDebugInputEvent(kind: "beforeinput" | "input", e: InputEvent) {
+        const target = e.target as Node | null;
+        if (!target || !(target instanceof Node)) return;
+        const host = target instanceof Element ? target.closest("td, th") : target.parentElement?.closest("td, th");
+        if (!(host instanceof HTMLTableCellElement)) return;
+        const table = host.closest("table");
+        if (table instanceof HTMLTableElement) {
+          this.interactingTable = table;
+          this.interactingTableUntil = Date.now() + 1200;
+        }
+        const wrapper = host.querySelector(":scope > .table-cell-wrapper");
+        const row = host.parentElement instanceof HTMLTableRowElement ? host.parentElement : null;
+        const nextRow = row?.nextElementSibling instanceof HTMLTableRowElement ? row.nextElementSibling : null;
+        reportLpDebug("A", `src/render/livePreview.ts:${kind}`, `table ${kind}`, {
+          inputType: e.inputType ?? null,
+          data: e.data ?? null,
+          isComposing: e.isComposing ?? false,
+          hostTag: host.tagName,
+          hostText: host.textContent?.slice(0, 80) ?? "",
+          hostRowspan: host.getAttribute("rowspan"),
+          hostColspan: host.getAttribute("colspan"),
+          hostMerge: host.dataset.tmMerge ?? null,
+          hostMergeAxis: host.dataset.tmMergeAxis ?? null,
+          activeTag: host.ownerDocument.activeElement?.tagName ?? null,
+          wrapperTag: wrapper instanceof HTMLElement ? wrapper.tagName : null,
+          wrapperClass: wrapper instanceof HTMLElement ? wrapper.className : null,
+          wrapperHeight: wrapper instanceof HTMLElement ? wrapper.getBoundingClientRect().height : null,
+          cellHeight: host.getBoundingClientRect().height,
+          rowHeight: row?.getBoundingClientRect().height ?? null,
+          nextRowHeight: nextRow?.getBoundingClientRect().height ?? null,
+          trackFreezeMs: table instanceof HTMLTableElement ? Math.max(0, this.interactingTableUntil - Date.now()) : 0,
+          ...getViewMetrics(this.view),
+        });
+      }
+
+      private handleDebugCompositionEvent(
+        kind: "compositionstart" | "compositionupdate" | "compositionend",
+        e: CompositionEvent,
+      ) {
+        const target = e.target as Node | null;
+        if (!target || !(target instanceof Node)) return;
+        const host = target instanceof Element ? target.closest("td, th") : target.parentElement?.closest("td, th");
+        if (!(host instanceof HTMLTableCellElement)) return;
+        const table = host.closest("table");
+        if (table instanceof HTMLTableElement) {
+          this.interactingTable = table;
+          this.interactingTableUntil = Date.now() + 1200;
+        }
+        reportLpDebug("A", `src/render/livePreview.ts:${kind}`, `table ${kind}`, {
+          data: e.data ?? null,
+          hostText: host.textContent?.slice(0, 80) ?? "",
+          hostMerge: host.dataset.tmMerge ?? null,
+          hostMergeAxis: host.dataset.tmMergeAxis ?? null,
+          selectionAnchorNode: host.ownerDocument.getSelection()?.anchorNode?.nodeName ?? null,
+          selectionAnchorOffset: host.ownerDocument.getSelection()?.anchorOffset ?? null,
+          trackFreezeMs: table instanceof HTMLTableElement ? Math.max(0, this.interactingTableUntil - Date.now()) : 0,
+          ...getViewMetrics(this.view),
+        });
+      }
+      // #endregion
     },
   );
 }
 
 function clearOverlayHandles(root: HTMLElement) {
   for (const handle of Array.from(root.querySelectorAll(".tm-lp-col-handle"))) handle.remove();
+}
+
+function findActiveEditingTable(doc: Document): HTMLTableElement | null {
+  const active = doc.activeElement;
+  if (active instanceof Element) {
+    const fromActive = active.closest("table");
+    if (fromActive instanceof HTMLTableElement) return fromActive;
+  }
+  const anchor = doc.getSelection()?.anchorNode ?? null;
+  const anchorParent = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
+  const fromSelection = anchorParent?.closest("table");
+  return fromSelection instanceof HTMLTableElement ? fromSelection : null;
+}
+
+function isEmbeddedTableEditorActive(doc: Document): boolean {
+  const active = doc.activeElement;
+  if (active instanceof Element && active.closest("table.table-editor")) return true;
+  const anchor = doc.getSelection()?.anchorNode ?? null;
+  const anchorParent = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
+  return !!anchorParent?.closest("table.table-editor");
 }
 
 function getRenderedWidths(table: HTMLTableElement, model: TableModel): number[] {
@@ -453,7 +796,21 @@ function modelHasMerges(model: TableModel): boolean {
   return false;
 }
 
-function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
+function applyMergesInPlace(
+  table: HTMLTableElement,
+  model: TableModel,
+  preserveEditingFlow = false,
+): void {
+  const beforeMetrics = getTableMetrics(table);
+  // #region debug-point B:apply-merges
+  reportLpDebug("B", "src/render/livePreview.ts:applyMergesInPlace", "apply merges in place", {
+    preserveEditingFlow,
+    rows: table.rows.length,
+    cols: model.cols,
+    hasMerges: modelHasMerges(model),
+    ...beforeMetrics,
+  });
+  // #endregion
   applyColWidthsInPlace(table, model);
   if (!modelHasMerges(model)) {
     // No merges — clean up any stale merge attributes from a previous pass
@@ -467,8 +824,17 @@ function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
       // LP 可能会被主题 / Obsidian 自带的表格样式覆盖，所以这里把我们之前
       // 为 merged anchor 写入的内联垂直对齐一并清掉，避免表格解除合并后还残留。
       td.style.removeProperty("vertical-align");
-      syncLpMergedCellWrapperAlignment(td, "");
+      syncLpMergedCellWrapperAlignment(td, "", preserveEditingFlow);
     }
+    // #region debug-point E:apply-merges-after-clean
+    reportLpDebug("E", "src/render/livePreview.ts:applyMergesInPlace", "apply merges cleanup completed", {
+      preserveEditingFlow,
+      hasMerges: false,
+      beforeHeight: beforeMetrics.height,
+      afterHeight: getTableMetrics(table).height,
+      ...getTableMetrics(table),
+    });
+    // #endregion
     return;
   }
   const rows = Array.from(table.rows);
@@ -506,12 +872,12 @@ function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
           // LP 的真实可视内容在 `.table-cell-wrapper` 里；若它被编辑器样式拉成
           // 与整格同高，`td` 的垂直居中会失效。这里把 wrapper 高度收回到内容
           // 本身，让 `table-cell` 级别的 `vertical-align: middle` 生效。
-          syncLpMergedCellWrapperAlignment(td, mergeAxis);
+          syncLpMergedCellWrapperAlignment(td, mergeAxis, preserveEditingFlow);
         } else {
           delete td.dataset.tmMerge;
           delete td.dataset.tmMergeAxis;
           td.style.removeProperty("vertical-align");
-          syncLpMergedCellWrapperAlignment(td, "");
+          syncLpMergedCellWrapperAlignment(td, "", preserveEditingFlow);
         }
         // Some Obsidian builds render raw `<br>` in a GFM table cell as plain
         // text instead of a real line break. Promote any literal `<br>` text
@@ -523,19 +889,62 @@ function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
         td.dataset.tmMerge = "placeholder";
         delete td.dataset.tmMergeAxis;
         td.style.removeProperty("vertical-align");
-        syncLpMergedCellWrapperAlignment(td, "");
+        syncLpMergedCellWrapperAlignment(td, "", preserveEditingFlow);
       }
     }
   }
+  // #region debug-point E:apply-merges-after
+  reportLpDebug("E", "src/render/livePreview.ts:applyMergesInPlace", "apply merges completed", {
+    preserveEditingFlow,
+    hasMerges: true,
+    beforeHeight: beforeMetrics.height,
+    afterHeight: getTableMetrics(table).height,
+    ...getTableMetrics(table),
+  });
+  // #endregion
 }
 
 function syncLpMergedCellWrapperAlignment(
   td: HTMLTableCellElement,
   mergeAxis: ReturnType<typeof mergeAxisForCell>,
+  preserveEditingFlow = false,
 ): void {
   const wrapper = td.firstElementChild;
   if (!(wrapper instanceof HTMLElement) || !wrapper.classList.contains("table-cell-wrapper")) return;
+  const doc = td.ownerDocument;
+  const active = doc?.activeElement;
+  const selection = doc?.getSelection();
+  const selectionAnchor = selection?.anchorNode ?? null;
+  const isEditingThisCell =
+    (!!active && td.contains(active)) ||
+    (!!selectionAnchor && td.contains(selectionAnchor));
+  // #region debug-point C:wrapper-sync
+  reportLpDebug("C", "src/render/livePreview.ts:syncLpMergedCellWrapperAlignment", "sync merged wrapper", {
+    mergeAxis,
+    preserveEditingFlow,
+    isEditingThisCell,
+    tdText: td.textContent?.slice(0, 80) ?? "",
+    tdRowspan: td.getAttribute("rowspan"),
+    tdColspan: td.getAttribute("colspan"),
+    tdHeight: td.getBoundingClientRect().height,
+    wrapperHeight: wrapper.getBoundingClientRect().height,
+    activeTag: active?.tagName ?? null,
+    selectionAnchorNode: selectionAnchor?.nodeName ?? null,
+  });
+  // #endregion
   if (mergeAxis === "row" || mergeAxis === "both") {
+    // 编辑态优先交还给 LP 原生布局。否则 wrapper 的展示态高度修正会和
+    // 当前输入中的可编辑层打架，造成文本临时“掉到单元格下面”的现象。
+    if (preserveEditingFlow || isEditingThisCell) {
+      wrapper.style.removeProperty("width");
+      wrapper.style.removeProperty("height");
+      wrapper.style.removeProperty("min-height");
+      wrapper.style.removeProperty("max-height");
+      wrapper.style.removeProperty("position");
+      wrapper.style.removeProperty("top");
+      wrapper.style.removeProperty("transform");
+      return;
+    }
     // 运行时证据表明：LP 的 `td` 已经正确拿到了 `vertical-align: middle`，
     // 但 `.table-cell-wrapper` 被主题/编辑器样式拉成了与整格等高，导致
     // 单元格垂直居中失效。这里不再改动 wrapper 的布局方式，只把它的高度
