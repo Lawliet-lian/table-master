@@ -16,7 +16,7 @@ import { EditorView, ViewPlugin, ViewUpdate, PluginValue } from "@codemirror/vie
 import { appendFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { isSeparatorLine, parseTable } from "../table/parser";
-import { isCaptionLine, isColWidthsLine, isStructuralTableLine } from "../table/structural";
+import { isCaptionLine, isColWidthsLine, isStructuralTableLine, isTableContextLine } from "../table/structural";
 import { cloneModel, mergeAxisForCell, type TableModel } from "../table/model";
 import { serialize, type OutputFormat } from "../table/serializer";
 
@@ -974,6 +974,7 @@ function clearRenderedMergePresentation(table: HTMLTableElement): void {
     td.classList.remove("tm-merge-placeholder");
     delete td.dataset.tmMerge;
     delete td.dataset.tmMergeAxis;
+    delete td.dataset.tmEditorMarker;
     td.style.removeProperty("vertical-align");
     syncLpMergedCellWrapperAlignment(td, "", false);
   }
@@ -1004,6 +1005,13 @@ function renderPlainMdTableInPlace(table: HTMLTableElement): void {
   // 等源码标记会直接显示出来，同时把布局控制权交还给表格编辑器本身。
   clearLpColWidthPresentation(table);
   clearRenderedMergePresentation(table);
+}
+
+function isEditingThisCellInDocument(td: HTMLTableCellElement): boolean {
+  const doc = td.ownerDocument;
+  const active = doc.activeElement;
+  const selectionAnchor = doc.getSelection()?.anchorNode ?? null;
+  return (!!active && td.contains(active)) || (!!selectionAnchor && td.contains(selectionAnchor));
 }
 
 function syncTableEditorCellText(td: HTMLTableCellElement, text: string): void {
@@ -1041,9 +1049,20 @@ function syncTableEditorMergeMarkersInPlace(table: HTMLTableElement, model: Tabl
       td.classList.remove("tm-merge-placeholder");
       delete td.dataset.tmMerge;
       delete td.dataset.tmMergeAxis;
+      delete td.dataset.tmEditorMarker;
       td.style.removeProperty("vertical-align");
       if (!modelCell.isAnchor) {
-        syncTableEditorCellText(td, modelCell.raw);
+        if (isEditingThisCellInDocument(td)) {
+          // 当前光标就在这个占位格里时，仍然让宿主原生编辑层直接显示真实文本，
+          // 避免出现“正在编辑同一格，却看到伪元素 marker”的错位感。
+          syncTableEditorCellText(td, modelCell.raw);
+        } else {
+          // 非活动占位格改用 `data-* + CSS ::before` 显示 marker。这样即使宿主
+          // 在相邻单元格获得焦点时重新整理了 wrapper 文本，左侧 `< / ^^` 也
+          // 不会跟着一起消失。
+          td.dataset.tmEditorMarker = modelCell.raw;
+          syncTableEditorCellText(td, "");
+        }
       }
     }
   }
@@ -1325,6 +1344,24 @@ function collectTableSources(lines: string[]): TableSource[] {
   // blanks always split neighbouring tables.
   let allowOneBlank = true;
 
+  function shouldKeepBodyBreak(blankLine: number): boolean {
+    let j = blankLine + 1;
+    let sawSep = false;
+    let sawBody = false;
+    while (j < lines.length) {
+      const peek = lines[j];
+      if (peek == null || peek.trim() === "") break;
+      if (isSeparatorLine(peek)) {
+        sawSep = true;
+        break;
+      }
+      if (!isTableContextLine(peek)) break;
+      sawBody = true;
+      j++;
+    }
+    return sawBody && !sawSep;
+  }
+
   const flush = () => {
     while (buf.length && buf[buf.length - 1].trim() === "") {
       buf.pop();
@@ -1349,21 +1386,34 @@ function collectTableSources(lines: string[]): TableSource[] {
       blanks++;
       if (blanks >= 2) {
         flush();
-      } else if (allowOneBlank && i + 1 < lines.length) {
-        const next = lines[i + 1];
-        if (next != null && isStructuralTableLine(next) && !isSeparatorLine(next)) {
-          buf.push(line);
-          bufEnd = i;
-          allowOneBlank = false;
-          continue;
+      } else if (!hasSep) {
+        if (allowOneBlank && i + 1 < lines.length) {
+          const next = lines[i + 1];
+          if (next != null && isStructuralTableLine(next) && !isSeparatorLine(next)) {
+            buf.push(line);
+            bufEnd = i;
+            allowOneBlank = false;
+            continue;
+          }
         }
         flush();
+      } else if (shouldKeepBodyBreak(i)) {
+        // 只有 blank 下方继续跟着“纯正文行”时，才把它当作同一张表里的 tbody break。
+        // 下方若是新的注释/caption，则应归属于下一张表，而不是反向影响当前表。
+        buf.push(line);
+        bufEnd = i;
+        continue;
       } else {
         flush();
       }
       continue;
     }
     if (isStructuralTableLine(line)) {
+      if (hasSep && (isColWidthsLine(line) || isCaptionLine(line))) {
+        // `tm-colwidths` / caption 只允许作为表格上方的 leading metadata。
+        // 一旦当前表已经进入正文区域，再遇到元数据，说明它属于下一张表。
+        flush();
+      }
       // A second separator line means a new table is starting — flush the
       // previous one. Pop any header line(s) that belong to the new table.
       if (isSeparatorLine(line) && hasSep) {

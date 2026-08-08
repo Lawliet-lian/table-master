@@ -12,7 +12,7 @@ import {
 } from "obsidian";
 import { applyModelToTable } from "./tableRenderer";
 import { isSeparatorLine, parseTable } from "../table/parser";
-import { isCaptionLine, isColWidthsLine, isStructuralTableLine } from "../table/structural";
+import { isCaptionLine, isColWidthsLine, isStructuralTableLine, isTableContextLine } from "../table/structural";
 
 interface PostProcessorOptions {
   component: Component;
@@ -68,6 +68,24 @@ function collectTableSources(el: HTMLElement, ctx: MarkdownPostProcessorContext)
   // adjacent tables together via ≥2 blanks.
   let allowOneBlank = true;
 
+  function shouldKeepBodyBreak(blankLine: number): boolean {
+    let j = blankLine + 1;
+    let sawSep = false;
+    let sawBody = false;
+    while (j < lines.length) {
+      const peek = lines[j];
+      if (peek == null || peek.trim() === "") break;
+      if (isSeparatorLine(peek)) {
+        sawSep = true;
+        break;
+      }
+      if (!isTableContextLine(peek)) break;
+      sawBody = true;
+      j++;
+    }
+    return sawBody && !sawSep;
+  }
+
   const flush = () => {
     while (buf.length && buf[buf.length - 1].trim() === "") buf.pop();
     if (buf.length && hasSep) blocks.push(buf.join("\n"));
@@ -87,26 +105,32 @@ function collectTableSources(el: HTMLElement, ctx: MarkdownPostProcessorContext)
       // neighbouring tables are never merged.
       if (blanks >= 2) {
         flush();
-      } else if (allowOneBlank && i + 1 < lines.length) {
-        // Peek one line ahead: a single blank is only absorbed when the next
-        // non-blank line is *still* part of the same structural table (and
-        // not another separator — another separator always means a new table
-        // per the existing split logic below).
-        const next = lines[i + 1];
-        if (next != null && isStructuralTableLine(next) && !isSeparatorLine(next)) {
-          buf.push(line);
-          allowOneBlank = false;
-          continue;
+      } else if (!hasSep) {
+        // 表头之前仍然允许保留一行“metadata 与 header 之间”的空白。
+        if (allowOneBlank && i + 1 < lines.length) {
+          const next = lines[i + 1];
+          if (next != null && isStructuralTableLine(next) && !isSeparatorLine(next)) {
+            buf.push(line);
+            allowOneBlank = false;
+            continue;
+          }
         }
-        // Otherwise treat the single blank like a break and let the fallback
-        // flush at the end of the loop kick in so we don't extend past it.
         flush();
+      } else if (shouldKeepBodyBreak(i)) {
+        // separator 之后的单空行只在下方继续跟着正文行时才视作 tbody break。
+        // 如果下方先出现的是 colWidths/caption，它应当属于下一张表。
+        buf.push(line);
+        continue;
       } else {
         flush();
       }
       continue;
     }
     if (isStructuralTableLine(line)) {
+      if (hasSep && (isColWidthsLine(line) || isCaptionLine(line))) {
+        // trailing metadata 不再反向挂到上一张表，统一收紧为 leading metadata only。
+        flush();
+      }
       // A second separator line means a new table is starting — flush the
       // previous one. We also remove any trailing blanks and the header line
       // that was already buffered as part of the new table's header.

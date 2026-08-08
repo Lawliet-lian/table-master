@@ -107,6 +107,17 @@ table th.tm-merge-placeholder {
   display: none;
 }
 
+/* 编辑态的原生 `table.table-editor` 里，我们不再把占位格真正写成 merge DOM，
+ * 但仍需要稳定显示 `<` / `^^` 这类源码标记。直接写文本会被宿主在相邻单元格
+ * 获得焦点时清空，因此这里改用 `data-tm-editor-marker + ::before`：
+ * - 当前活动单元格仍走真实文本，方便编辑；
+ * - 非活动占位格由伪元素补出 marker，避免“左边的 < 跟着右边光标一起消失”。 */
+table.table-editor td[data-tm-editor-marker]::before,
+table.table-editor th[data-tm-editor-marker]::before {
+  content: attr(data-tm-editor-marker);
+  white-space: pre-wrap;
+}
+
 /* ===== Live Preview column-width overlay (stage 5) =====
  * Overlay handles live on <body>, not inside the CodeMirror table widget.
  * This keeps LP stable: we only move fixed-position overlay affordances and a

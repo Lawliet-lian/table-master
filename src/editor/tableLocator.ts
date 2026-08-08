@@ -123,14 +123,14 @@ export function findTableBlock(
     break;
   }
 
-  // 3) Extend down from sepLine. Single blank acts as tbody-break only when
-  //    the line two below is body (table-context but NOT a separator).
+  // 3) Extend down from sepLine. 下方的 colWidths/caption 不再属于当前表；
+  //    只有正文行才能继续向下扩展。单空行也只在后面继续跟着正文时才算 tbody-break。
   let end = sepLine;
   while (end < lineCount - 1) {
     const next = getLineFn(end + 1);
     if (next == null) break;
     if (isSeparatorLine(next)) break;
-    if (isStructuralTableLine(next)) {
+    if (isTableContextLine(next)) {
       end++;
       continue;
     }
@@ -149,7 +149,7 @@ export function findTableBlock(
           break;
         }
         if (peek.trim() === "") break;
-        if (!isStructuralTableLine(peek)) break;
+        if (!isTableContextLine(peek)) break;
         sawBody = true;
         j++;
       }
