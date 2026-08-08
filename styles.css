@@ -421,32 +421,23 @@ table.tm-rendered tbody + tbody {
   border-top: 2px solid var(--background-modifier-border);
 }
 
-/* Highlight merged anchors so the user can spot the merged region at a
- * glance. The legacy `.tm-merged-anchor` class is kept for backward compat,
- * but the actual marker on rendered tables is `data-tm-merge="anchor"`
- * (set by Live Preview) and the `[rowspan]` / `[colspan]` attributes
- * (set by Reading-view rebuild + grid editor). */
+/* 合并后的 anchor cell 不再额外填充背景。
+ * 这样纯横向合并、纵向合并、块合并都会回到表格本身的底色，不再出现
+ * “为了提示 merge 区域而把整块涂灰”的视觉效果。网格编辑器里保留
+ * `.tm-selected` 的选中高亮，所以这里显式排除它。 */
 table.tm-rendered td.tm-merged-anchor,
 table.tm-rendered th.tm-merged-anchor,
-table.tm-rendered td[rowspan]:not([rowspan="1"]),
-table.tm-rendered th[rowspan]:not([rowspan="1"]),
-table.tm-rendered td[colspan]:not([colspan="1"]),
-table.tm-rendered th[colspan]:not([colspan="1"]),
-table td[data-tm-merge="anchor"],
-table th[data-tm-merge="anchor"] {
-  background-color: var(--background-secondary-alt);
+table td[data-tm-merge="anchor"][data-tm-merge-axis]:not(.tm-selected),
+table th[data-tm-merge="anchor"][data-tm-merge-axis]:not(.tm-selected) {
+  background-color: transparent;
 }
 
-/* Vertically center the text inside any cell that spans more than one row.
- * Covers all three renderers: Reading view (`table.tm-rendered td[rowspan]`),
- * Live Preview (anchor cells flagged with `data-tm-merge="anchor"`), and the
- * modal grid editor (`table.tm-grid`). Merging up / down should feel
- * symmetric — the merged text sits between the rows it now spans. */
-table.tm-rendered td[rowspan]:not([rowspan="1"]),
-table.tm-rendered th[rowspan]:not([rowspan="1"]),
-table td[data-tm-merge="anchor"][rowspan]:not([rowspan="1"]),
-table th[data-tm-merge="anchor"][rowspan]:not([rowspan="1"]),
-table.tm-grid td[rowspan]:not([rowspan="1"]),
-table.tm-grid th[rowspan]:not([rowspan="1"]) {
+/* 只有存在纵向跨度的合并单元格才做垂直居中。
+ * 纯横向合并（`data-tm-merge-axis="col"`）不改垂直对齐，
+ * 这样它会继续沿用表格原本的行内对齐表现。水平对齐仍由列对齐设置控制。 */
+table td[data-tm-merge="anchor"][data-tm-merge-axis="row"],
+table th[data-tm-merge="anchor"][data-tm-merge-axis="row"],
+table td[data-tm-merge="anchor"][data-tm-merge-axis="both"],
+table th[data-tm-merge="anchor"][data-tm-merge-axis="both"] {
   vertical-align: middle;
 }

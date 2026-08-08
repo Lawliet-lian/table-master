@@ -1,6 +1,7 @@
 // Pure data layer for tables. Has no Obsidian dependencies so it is fully unit-testable.
 
 export type Align = "left" | "center" | "right" | "none";
+export type MergeAxis = "row" | "col" | "both";
 
 // 列宽持久化的默认与边界常量，阶段一先只在数据层定义。
 // 注：像素宽度统一为正整数，渲染层可在后续阶段使用这些常量做归一化。
@@ -34,6 +35,26 @@ export interface Cell {
   /** Span values are only meaningful on anchor cells. */
   rowspan: number;
   colspan: number;
+}
+
+/**
+ * 把 anchor cell 的跨度转换成样式层可消费的“合并方向”语义。
+ *
+ * 这样渲染层和样式层就不需要各自重复写
+ * `rowspan > 1 && colspan > 1 ? ...`
+ * 这类判断了。三条链路统一使用这个函数后：
+ * - 阅读模式重建 DOM；
+ * - Live Preview 原地补属性；
+ * - 网格编辑器实时绘制；
+ * 都会产出一致的 `data-tm-merge-axis` 标记。
+ */
+export function mergeAxisForCell(cell: Pick<Cell, "rowspan" | "colspan">): MergeAxis | "" {
+  const hasRowMerge = cell.rowspan > 1;
+  const hasColMerge = cell.colspan > 1;
+  if (hasRowMerge && hasColMerge) return "both";
+  if (hasRowMerge) return "row";
+  if (hasColMerge) return "col";
+  return "";
 }
 
 export interface TableCaption {

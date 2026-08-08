@@ -1,0 +1,24 @@
+/*调整obsidian编辑器左右宽度*/
+body {
+	--file-line-width: 100%;
+  color: #d0d0d0; /* 默认基础字体颜色 */
+}
+
+/* 修改单行代码的样式 */
+.cm-s-obsidian .cm-inline-code {
+  # background-color: #f0f0f0; /* 背景颜色 */
+  # color: #FF8C00 !important;  /* 文字颜色 */
+  # font-family: 'Courier New', monospace; /* 字体 */
+  # font-size: 14px; /* 字体大小 */
+  # padding: 2px 4px; /* 内边距 */
+  # border-radius: 4px; /* 圆角 */
+  border: 0.01px solid #ddd; /* 边框 */
+}
+
+/*修改加粗字体样式*/
+.cm-strong {
+    font-weight: 900;   /* 强制加粗 */
+    color: #6B8E23 !important;           /* 使用更亮的颜色（例如橄榄绿） */
+    # font-size: 1.2em !important;   /* 增大字体尺寸 */
+
+}

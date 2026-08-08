@@ -9,6 +9,7 @@ import {
   cloneModel,
   DEFAULT_COL_WIDTH,
   MIN_COL_WIDTH,
+  mergeAxisForCell,
 } from "../table/model";
 import * as ops from "../table/ops";
 import { t } from "../i18n";
@@ -212,6 +213,13 @@ export class GridEditorModal extends Modal {
         const td = tr.createEl(isHeaderRow ? "th" : "td");
         if (cell.rowspan > 1) td.setAttr("rowspan", String(cell.rowspan));
         if (cell.colspan > 1) td.setAttr("colspan", String(cell.colspan));
+        const mergeAxis = mergeAxisForCell(cell);
+        if (mergeAxis) {
+          // 网格编辑器也输出与阅读模式 / LP 一致的语义标记，
+          // 这样合并后的垂直居中和背景规则在三条链路里会保持同一套表现。
+          td.dataset.tmMerge = "anchor";
+          td.dataset.tmMergeAxis = mergeAxis;
+        }
         td.dataset.r = String(r);
         td.dataset.c = String(c);
 

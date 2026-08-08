@@ -4,7 +4,7 @@
 
 import type { App, Component, MarkdownRenderer as MdRenderer } from "obsidian";
 import { MarkdownRenderer } from "obsidian";
-import { MIN_COL_WIDTH, TableModel } from "../table/model";
+import { MIN_COL_WIDTH, TableModel, mergeAxisForCell } from "../table/model";
 
 // 阅读模式布局算法版本。只要阅读模式的宽度归一化 / 再分配策略发生变化，
 // 升这个版本就能让已有 DOM 在下次 post-processor 运行时重新渲染，
@@ -326,6 +326,14 @@ function rowToTr(
     const td = doc.createElement(tag);
     if (cell.rowspan > 1) td.setAttribute("rowspan", String(cell.rowspan));
     if (cell.colspan > 1) td.setAttribute("colspan", String(cell.colspan));
+    const mergeAxis = mergeAxisForCell(cell);
+    if (mergeAxis) {
+      // 给阅读模式重建出来的 anchor cell 标注合并方向。
+      // 样式层随后只依赖这一层语义来决定“是否垂直居中 / 是否保留背景”，
+      // 不再需要同时兼容多套 `[rowspan]` / `[colspan]` 选择器组合。
+      td.dataset.tmMerge = "anchor";
+      td.dataset.tmMergeAxis = mergeAxis;
+    }
     const align = model.aligns[c];
     if (align && align !== "none") td.style.textAlign = align;
     td.dataset.tmRow = String(r);

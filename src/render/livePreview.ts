@@ -15,7 +15,7 @@
 import { EditorView, ViewPlugin, ViewUpdate, PluginValue } from "@codemirror/view";
 import { isSeparatorLine, parseTable } from "../table/parser";
 import { isCaptionLine, isColWidthsLine, isStructuralTableLine } from "../table/structural";
-import { cloneModel, type TableModel } from "../table/model";
+import { cloneModel, mergeAxisForCell, type TableModel } from "../table/model";
 import { serialize, type OutputFormat } from "../table/serializer";
 
 // Live Preview 单独使用更高的拖拽下限。阅读模式和网格编辑器继续沿用
@@ -463,6 +463,11 @@ function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
       td.removeAttribute("rowspan");
       td.classList.remove("tm-merge-placeholder");
       delete td.dataset.tmMerge;
+      delete td.dataset.tmMergeAxis;
+      // LP 可能会被主题 / Obsidian 自带的表格样式覆盖，所以这里把我们之前
+      // 为 merged anchor 写入的内联垂直对齐一并清掉，避免表格解除合并后还残留。
+      td.style.removeProperty("vertical-align");
+      syncLpMergedCellWrapperAlignment(td, "");
     }
     return;
   }
@@ -478,12 +483,36 @@ function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
       const td = cells[c];
       if (!modelCell || !td) continue;
       if (modelCell.isAnchor) {
+        const mergeAxis = mergeAxisForCell(modelCell);
         if (modelCell.rowspan > 1) td.setAttribute("rowspan", String(modelCell.rowspan));
         else td.removeAttribute("rowspan");
         if (modelCell.colspan > 1) td.setAttribute("colspan", String(modelCell.colspan));
         else td.removeAttribute("colspan");
         td.classList.remove("tm-merge-placeholder");
-        td.dataset.tmMerge = modelCell.rowspan > 1 || modelCell.colspan > 1 ? "anchor" : "";
+        if (mergeAxis) {
+          // LP 里不重建单元格，只是给现有 DOM 补属性；这里补上统一的
+          // `data-tm-merge-axis`，让它和阅读模式 / 网格编辑器共享同一套样式语义。
+          td.dataset.tmMerge = "anchor";
+          td.dataset.tmMergeAxis = mergeAxis;
+          // 纵向合并在 LP 中需要直接写内联 `vertical-align`，而且这里显式用
+          // `!important`，这样即使主题或 Obsidian 自带的 LP 表格规则也写了
+          // 更强的选择器 / `!important`，纵向合并锚点依然会按预期垂直居中。
+          // 纯横向合并则保持默认表现。
+          if (mergeAxis === "row" || mergeAxis === "both") {
+            td.style.setProperty("vertical-align", "middle", "important");
+          } else {
+            td.style.removeProperty("vertical-align");
+          }
+          // LP 的真实可视内容在 `.table-cell-wrapper` 里；若它被编辑器样式拉成
+          // 与整格同高，`td` 的垂直居中会失效。这里把 wrapper 高度收回到内容
+          // 本身，让 `table-cell` 级别的 `vertical-align: middle` 生效。
+          syncLpMergedCellWrapperAlignment(td, mergeAxis);
+        } else {
+          delete td.dataset.tmMerge;
+          delete td.dataset.tmMergeAxis;
+          td.style.removeProperty("vertical-align");
+          syncLpMergedCellWrapperAlignment(td, "");
+        }
         // Some Obsidian builds render raw `<br>` in a GFM table cell as plain
         // text instead of a real line break. Promote any literal `<br>` text
         // node to a real <br> element so multi-line cells (Excel paste, etc.)
@@ -492,8 +521,41 @@ function applyMergesInPlace(table: HTMLTableElement, model: TableModel): void {
       } else {
         td.classList.add("tm-merge-placeholder");
         td.dataset.tmMerge = "placeholder";
+        delete td.dataset.tmMergeAxis;
+        td.style.removeProperty("vertical-align");
+        syncLpMergedCellWrapperAlignment(td, "");
       }
     }
+  }
+}
+
+function syncLpMergedCellWrapperAlignment(
+  td: HTMLTableCellElement,
+  mergeAxis: ReturnType<typeof mergeAxisForCell>,
+): void {
+  const wrapper = td.firstElementChild;
+  if (!(wrapper instanceof HTMLElement) || !wrapper.classList.contains("table-cell-wrapper")) return;
+  if (mergeAxis === "row" || mergeAxis === "both") {
+    // 运行时证据表明：LP 的 `td` 已经正确拿到了 `vertical-align: middle`，
+    // 但 `.table-cell-wrapper` 被主题/编辑器样式拉成了与整格等高，导致
+    // 单元格垂直居中失效。这里不再改动 wrapper 的布局方式，只把它的高度
+    // 收回到内容本身，让 `td` 的 table-cell 垂直居中重新生效。
+    wrapper.style.width = "100%";
+    wrapper.style.setProperty("height", "auto", "important");
+    wrapper.style.setProperty("min-height", "0", "important");
+    wrapper.style.setProperty("max-height", "max-content", "important");
+    wrapper.style.removeProperty("position");
+    wrapper.style.removeProperty("top");
+    wrapper.style.removeProperty("transform");
+  } else {
+    wrapper.style.removeProperty("display");
+    wrapper.style.removeProperty("width");
+    wrapper.style.removeProperty("height");
+    wrapper.style.removeProperty("min-height");
+    wrapper.style.removeProperty("max-height");
+    wrapper.style.removeProperty("position");
+    wrapper.style.removeProperty("top");
+    wrapper.style.removeProperty("transform");
   }
 }
 
