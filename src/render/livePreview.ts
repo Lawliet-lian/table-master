@@ -15,8 +15,13 @@
 import { EditorView, ViewPlugin, ViewUpdate, PluginValue } from "@codemirror/view";
 import { isSeparatorLine, parseTable } from "../table/parser";
 import { isCaptionLine, isColWidthsLine, isStructuralTableLine } from "../table/structural";
-import { cloneModel, MIN_COL_WIDTH, type TableModel } from "../table/model";
+import { cloneModel, type TableModel } from "../table/model";
 import { serialize, type OutputFormat } from "../table/serializer";
+
+// Live Preview 单独使用更高的拖拽下限。阅读模式和网格编辑器继续沿用
+// TableModel 的全局 MIN_COL_WIDTH，这样可以保持当前阅读模式“看起来挺好”的
+// 现状，同时把 LP 交互最小宽度固定到用户要求的 33。
+const LP_MIN_COL_WIDTH = 33;
 
 interface LivePreviewHost {
   getOutputFormat(): OutputFormat;
@@ -242,7 +247,7 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
           model: cloneModel(model),
           widths: widths.slice(),
           startWidths: widths.slice(),
-          minWidths: new Array<number>(model.cols).fill(MIN_COL_WIDTH),
+          minWidths: new Array<number>(model.cols).fill(LP_MIN_COL_WIDTH),
           col,
           startX: e.clientX,
         };
@@ -257,7 +262,7 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
       private handlePointerMove(e: PointerEvent) {
         if (!this.drag) return;
         const delta = e.clientX - this.drag.startX;
-        const minWidth = this.drag.minWidths[this.drag.col] ?? MIN_COL_WIDTH;
+        const minWidth = this.drag.minWidths[this.drag.col] ?? LP_MIN_COL_WIDTH;
         const next = Math.max(minWidth, Math.round(this.drag.startWidths[this.drag.col] + delta));
         if (next === this.drag.widths[this.drag.col]) return;
         this.drag.widths[this.drag.col] = next;
@@ -330,8 +335,8 @@ function getRenderedWidths(table: HTMLTableElement, model: TableModel): number[]
       col += span;
     }
   }
-  const fallback = Math.max(MIN_COL_WIDTH, Math.round(table.getBoundingClientRect().width / Math.max(1, model.cols)));
-  return widths.map((w) => Math.max(MIN_COL_WIDTH, w || fallback));
+  const fallback = Math.max(LP_MIN_COL_WIDTH, Math.round(table.getBoundingClientRect().width / Math.max(1, model.cols)));
+  return widths.map((w) => Math.max(LP_MIN_COL_WIDTH, w || fallback));
 }
 
 /**
@@ -551,7 +556,7 @@ function applyColWidthsInPlace(table: HTMLTableElement, model: TableModel): void
   // This keeps LP aligned with the stored metadata instead of letting the
   // editor pane redistribute the extra width.
   table.style.tableLayout = "fixed";
-  table.style.width = `${Math.max(totalWidth, MIN_COL_WIDTH * model.cols)}px`;
+  table.style.width = `${Math.max(totalWidth, LP_MIN_COL_WIDTH * model.cols)}px`;
   table.style.minWidth = table.style.width;
   table.style.maxWidth = "none";
   for (const cell of Array.from(table.querySelectorAll<HTMLTableCellElement>("th, td"))) {
