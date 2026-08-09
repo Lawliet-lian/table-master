@@ -2,7 +2,7 @@
 //   - "extended": GFM table with Table Extended `^^` / `<` placeholders for merged cells
 //   - "html":     raw <table> with colspan/rowspan attributes
 
-import { Align, Cell, TableModel, recomputeSpans, MIN_COL_WIDTH } from "./model";
+import { Align, Cell, TableModel, recomputeSpans, MIN_COL_WIDTH, DEFAULT_COL_WIDTH } from "./model";
 
 export type OutputFormat = "extended" | "html";
 
@@ -76,16 +76,34 @@ function captionLine(model: TableModel): string | null {
 
 /**
  * 生成列宽持久化注释行。
- * 输出严格前置校验：数组存在、长度等于列数、每一项都是合法整数且 >= MIN_COL_WIDTH。
- * 任何一项不满足都不输出注释，避免写出下游 parser 会判定为非法的元数据。
+ *
+ * 这里额外做一层“写回归一化”：
+ * - 若 model.colWidths 不存在，仍然保持“不输出注释”的历史语义；
+ * - 但只要数组存在，就在序列化时强制把它修正到 `cols` 长度：
+ *   - 长了就裁掉；
+ *   - 短了就补 DEFAULT_COL_WIDTH；
+ *   - 非法值 / 非整数统一 round + clamp 到 MIN_COL_WIDTH 以上。
+ *
+ * 这样做的目的，是给所有写回入口加一个最终兜底：
+ * - 插列 / 删列正常情况下会在 ops 层同步维护 colWidths；
+ * - 但如果某条入口因为旧状态、边界条件或未来改动导致 `colWidths.length !== cols`，
+ *   这里仍然会把注释自动修正成当前列数对应的最新值，避免出现“表结构变了，但
+ *   tm-colwidths 注释没更新”。
  */
-function colWidthsLine(model: TableModel): string | null {
+function normalizedColWidthsForSerialization(model: TableModel): number[] | null {
   if (!model.colWidths) return null;
-  if (model.colWidths.length !== model.cols) return null;
-  for (const w of model.colWidths) {
-    if (!Number.isFinite(w) || w < MIN_COL_WIDTH || !Number.isInteger(w)) return null;
-  }
-  return `<!-- tm-colwidths: ${model.colWidths.join("|")} -->`;
+  const widths = model.colWidths.slice(0, model.cols);
+  while (widths.length < model.cols) widths.push(DEFAULT_COL_WIDTH);
+  return widths.map((raw) => {
+    const num = Number.isFinite(raw) ? Math.round(raw) : DEFAULT_COL_WIDTH;
+    return Math.max(MIN_COL_WIDTH, num);
+  });
+}
+
+function colWidthsLine(model: TableModel): string | null {
+  const widths = normalizedColWidthsForSerialization(model);
+  if (!widths) return null;
+  return `<!-- tm-colwidths: ${widths.join("|")} -->`;
 }
 
 function splitCellLines(cell: Cell): string[] {

@@ -18,6 +18,7 @@ import { join } from "path";
 import { isSeparatorLine, parseTable } from "../table/parser";
 import { isCaptionLine, isColWidthsLine, isStructuralTableLine, isTableContextLine } from "../table/structural";
 import { cloneModel, mergeAxisForCell, type TableModel } from "../table/model";
+import { deriveNormalizedLeadingColWidths } from "../table/colWidths";
 import { serialize, type OutputFormat } from "../table/serializer";
 
 // Live Preview 单独使用更高的拖拽下限。阅读模式和网格编辑器继续沿用
@@ -461,6 +462,17 @@ export function buildLivePreviewExt(host: LivePreviewHost) {
           if (!source) continue;
           try {
             const { model } = parseTable(source.text);
+            // 用户在 LP / 源码里改完列结构后，旧的 `tm-colwidths` 注释可能会暂时
+            // 落后于当前列数。这里等输入稳定后做一次轻量回写，把注释补齐到最新
+            // 列数，避免出现“表是 4 列，注释还是 3 列”的状态。
+            if (!preserveEditingFlow && !tableEditorActive) {
+              const normalizedWriteback = getColWidthsNormalizationWritebackModel(source, model);
+              if (normalizedWriteback) {
+                writeModelBack(this.view, source, normalizedWriteback, host.getOutputFormat());
+                this.schedule();
+                return;
+              }
+            }
             const renderPlainEditingTable = shouldRenderPlainEditingTable(
               table,
               activeEditingTable,
@@ -886,6 +898,31 @@ function sameWidths(a: number[], b: number[]): boolean {
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+
+/**
+ * 当源码里已经存在 `tm-colwidths`，但用户通过 LP / 源码编辑把表格列数改掉后，
+ * parser 会故意丢弃那条“长度已失配”的旧列宽数组，避免错误套到新列上。
+ *
+ * 但仅仅丢弃还不够：如果不再往回写，源码里的注释会一直停留在旧列数，用户看到的
+ * 就是“表已经 4 列了，注释还是 3 列”。
+ *
+ * 这里的策略很克制：
+ * - 只在源码本来就声明过 `tm-colwidths` 时介入；
+ * - 只把旧注释修正到当前 `model.cols`；
+ * - 不主动给“从未声明过列宽”的表新增注释，保持历史语义不变。
+ */
+function getColWidthsNormalizationWritebackModel(source: TableSource, model: TableModel): TableModel | null {
+  const normalized = deriveNormalizedLeadingColWidths(source.text, model.cols);
+  if (!normalized) return null;
+
+  if (Array.isArray(model.colWidths) && model.colWidths.length === model.cols && sameWidths(model.colWidths, normalized)) {
+    return null;
+  }
+
+  const next = cloneModel(model);
+  next.colWidths = normalized;
+  return next;
 }
 
 function writeModelBack(view: EditorView, source: TableSource, model: TableModel, format: OutputFormat) {
