@@ -125,9 +125,23 @@ table.table-editor th[data-tm-editor-marker]::before {
  */
 .tm-lp-col-overlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
   pointer-events: none;
   z-index: var(--layer-popover, 30);
+  /* 这里不要再用 `inset: 0` 把根节点铺满整个窗口。
+   *
+   * 在 Obsidian / Electron 的自定义标题栏里，顶部留白区域本身就是
+   * 窗口拖拽热区。之前这个 overlay 虽然 `pointer-events: none`，但根节点
+   * 仍然以 fixed 全屏层的形式盖在整个窗口上，实际会把标题栏拖拽区域也一并
+   * 覆盖掉，表现为“顶部空白处无法拖动窗口”。
+   *
+   * 这里把 overlay 根节点收成 0x0，只把真正可交互的手柄/引导线作为
+   * `position: fixed` 子元素绘制出来。这样既保留列宽拖拽能力，又不会让
+   * 一个透明全屏层长期占住窗口顶部。 */
 }
 
 .tm-lp-col-overlay.is-visible {
